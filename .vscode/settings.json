@@ -1,0 +1,24 @@
+{
+    "rest-client.environmentVariables": {
+        "$shared": {},
+        "localhost": {
+            "serverHost": "http://localhost:5000",
+			"clientID": "",
+			"clientAccessToken":"",
+            "clientRefreshToken":"",
+			"agentID":"",
+			"agentAccessToken":"",
+			"agentRefreshToken":"",
+            "adminID":"",
+            "adminAccessToken":"",
+            "adminRefreshToken":""
+        }
+    },
+    "cSpell.words": [
+        "allisswellxyz",
+        "jtis",
+        "sadd",
+        "smembers",
+        "srem"
+    ]
+}
