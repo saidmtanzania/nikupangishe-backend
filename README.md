@@ -1,98 +1,243 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# 🏠 Nikupangishe API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+> **Tanzanian Long-term Rental Platform** — Owner-led, Agent-powered, Tenant-friendly.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Built with **NestJS**, **PostgreSQL**, **Redis**, and **Socket.IO**.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## 🏗️ Architecture Overview
 
-## Project setup
-
-```bash
-$ npm install
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        NIKUPANGISHE API                          │
+│                                                                   │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐  │
+│  │  Auth    │  │  Houses  │  │ Viewings │  │   Exchanges    │  │
+│  │  Module  │  │  Module  │  │  Module  │  │    Module      │  │
+│  └──────────┘  └──────────┘  └──────────┘  └────────────────┘  │
+│                                                                   │
+│  ┌──────────────────────┐    ┌────────────────────────────────┐  │
+│  │   Chat Module        │    │    Notifications Module        │  │
+│  │  (REST + Socket.IO)  │    │   (REST + Real-time push)      │  │
+│  └──────────────────────┘    └────────────────────────────────┘  │
+│                                                                   │
+│           PostgreSQL ◄──────────► Redis Cache                    │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Compile and run the project
+## 🚀 Quick Start
 
+### Prerequisites
+- Node.js 18+
+- Docker & Docker Compose
+
+### 1. Clone & Install
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+git clone <repo>
+cd nikupangishe-api
+cp .env.example .env
+npm install
 ```
 
-## Run tests
-
+### 2. Start with Docker (recommended)
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+docker-compose up -d
 ```
 
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
+### 3. Or run locally (requires PostgreSQL + Redis running)
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Edit .env with your DB/Redis credentials
+npm run start:dev
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+API will be available at: **http://localhost:3000/api/v1**  
+Swagger docs: **http://localhost:3000/docs**
 
-## Resources
+---
 
-Check out a few resources that may come in handy when working with NestJS:
+## 📋 API Modules
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+### 🔐 Auth (`/api/v1/auth`)
+| Method | Endpoint | Role | Description |
+|--------|----------|------|-------------|
+| POST | `/register` | Public | Register (owner/agent/tenant) |
+| POST | `/login` | Public | Login with email + password |
+| POST | `/verify-phone` | Public | Verify phone with OTP |
+| POST | `/resend-otp/:phone` | Public | Resend verification OTP |
+| POST | `/refresh` | Public | Refresh access token |
+| POST | `/logout` | Any | Invalidate tokens |
+| GET | `/me` | Any | Get current user profile |
+| POST | `/change-password` | Any | Change password |
 
-## Support
+### 🏠 Houses (`/api/v1/houses`)
+| Method | Endpoint | Role | Description |
+|--------|----------|------|-------------|
+| GET | `/` | Public | Browse all available houses |
+| GET | `/my-houses` | Owner | List owner's houses |
+| GET | `/pending-verification` | Admin | Houses awaiting review |
+| GET | `/:id` | Public | Get house details |
+| POST | `/` | Owner | Create a new listing |
+| PUT | `/:id` | Owner | Update house |
+| DELETE | `/:id` | Owner | Deactivate listing |
+| POST | `/:id/agents` | Owner | Assign agent to house |
+| DELETE | `/:id/agents/:agentId` | Owner | Remove agent |
+| PATCH | `/:id/verify` | Admin | Verify or reject listing |
+| POST | `/:id/photos` | Owner | Upload photos |
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+### 📅 Viewings (`/api/v1/viewings`)
+| Method | Endpoint | Role | Description |
+|--------|----------|------|-------------|
+| POST | `/` | Tenant | Request a viewing |
+| GET | `/my-viewings` | Any | Get my viewings (role-based) |
+| GET | `/:id` | Any | Get viewing details |
+| PATCH | `/:id` | Agent/Tenant | Update viewing status |
 
-## Stay in touch
+**Viewing statuses:** `pending` → `confirmed` → `completed` / `cancelled` / `no_show`
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### 🔄 Exchanges (`/api/v1/exchanges`)
+| Method | Endpoint | Role | Description |
+|--------|----------|------|-------------|
+| POST | `/` | Tenant | Request move or exchange |
+| GET | `/my-exchanges` | Any | Get my exchange requests |
+| GET | `/:id` | Any | Exchange details |
+| PATCH | `/:id/approve` | Owner | Approve the exchange |
+| PATCH | `/:id/reject` | Owner | Reject the exchange |
+| POST | `/confirm-tenancy` | Owner | Confirm tenant occupancy |
 
-## License
+**Exchange flow:**
+```
+Tenant requests → Initiator's Owner approves → Target Owner approves → Auto-completed
+```
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+### 💬 Chat (`/api/v1/chat` + WebSocket `/chat`)
+
+**REST endpoints:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/conversations` | All conversations |
+| GET | `/conversations/:id/messages` | Messages in conversation |
+| GET | `/unread-count` | Total unread count |
+
+**Socket.IO events (connect to `ws://localhost:3000/chat`):**
+
+```javascript
+// Connect with auth token
+const socket = io('http://localhost:3000/chat', {
+  auth: { token: 'your_jwt_token' }
+});
+
+// Emit events
+socket.emit('join:conversation', { conversationId: 'house:uuid:tenant:uuid' });
+socket.emit('message:send', {
+  conversationId: 'house:uuid:tenant:uuid',
+  receiverId: 'receiver-user-id',
+  content: 'Hello! Is the house still available?',
+  type: 'text'
+});
+socket.emit('message:read', { conversationId: '...' });
+socket.emit('typing:start', { conversationId: '...' });
+socket.emit('typing:stop', { conversationId: '...' });
+
+// Listen to events
+socket.on('message:new', (message) => { /* new message */ });
+socket.on('message:read', (data) => { /* messages read */ });
+socket.on('typing:start', (data) => { /* someone typing */ });
+socket.on('typing:stop', (data) => { /* stopped typing */ });
+socket.on('notification:new', (notification) => { /* new notification */ });
+socket.on('user:online', ({ userId }) => { /* user came online */ });
+socket.on('user:offline', ({ userId }) => { /* user went offline */ });
+```
+
+**Conversation ID format:** `house:{houseId}:tenant:{tenantId}`
+
+### 🔔 Notifications (`/api/v1/notifications`)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/` | Get all notifications |
+| GET | `/unread-count` | Unread count |
+| PATCH | `/:id/read` | Mark as read |
+| PATCH | `/mark-all-read` | Mark all read |
+
+---
+
+## 👥 User Roles
+
+| Role | Description | Key Abilities |
+|------|-------------|---------------|
+| `owner` | Property owner | List houses, assign agents, approve tenants |
+| `agent` | Verified agent | Handle viewings, coordinate tenants |
+| `tenant` | Renter | Browse, request viewings, request moves |
+| `admin` | Platform admin | Verify listings and agents |
+
+---
+
+## 🗃️ Database Schema
+
+```
+users
+├── agent_profiles (1:1 with users where role=agent)
+├── tenant_profiles (1:1 with users where role=tenant)
+│
+houses (owned by users with role=owner)
+├── house_agents (M:M junction - owner assigns agents to houses)
+├── tenancies (official tenant-house records)
+│
+viewing_requests (tenant → house, handled by agent)
+exchange_requests (tenant move/swap, requires both owner approvals)
+│
+chat_messages (conversationId-based threading)
+notifications (user-specific, real-time via socket.io)
+```
+
+---
+
+## 🔑 Key Business Rules
+
+1. **One listing per house** — GPS proximity check (20m radius) prevents duplicates
+2. **Owner-controlled agents** — Agents can only work on houses where owners explicitly assigned them
+3. **Rent paid to owners directly** — Platform never handles money
+4. **Phone verification required** — Tanzanian number (+255XXXXXXXXX)
+5. **Exchange requires both owners** — Both the current and new house owners must approve
+6. **Agent earns on re-exchange** — Every tenant move through the same house earns the agent commission again
+
+---
+
+## 🔧 Environment Variables
+
+See `.env.example` for all configuration options.
+
+Key variables:
+```env
+DB_HOST=localhost          # PostgreSQL host
+REDIS_HOST=localhost       # Redis host  
+JWT_SECRET=...             # Must be strong in production
+JWT_EXPIRES_IN=7d          # Access token expiry
+JWT_REFRESH_EXPIRES_IN=30d # Refresh token expiry
+```
+
+---
+
+## 📡 Redis Usage
+
+- **Listing cache** — House search results cached for 5 minutes
+- **Single house cache** — Individual house details cached for 5 minutes
+- **Socket.IO adapter** — (configure with `@socket.io/redis-adapter` for multi-instance)
+
+To enable Redis caching, update `app.module.ts` CacheModule config with `cache-manager-redis-yet`.
+
+---
+
+## 🚀 Production Deployment
+
+1. Set `NODE_ENV=production`
+2. Use strong, random `JWT_SECRET` and `JWT_REFRESH_SECRET`
+3. Enable SSL for PostgreSQL connection
+4. Configure Redis with authentication
+5. Set up reverse proxy (nginx) with SSL termination
+6. Configure Socket.IO Redis adapter for horizontal scaling
+
+```bash
+npm run build
+npm run start:prod
+```
