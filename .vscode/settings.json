@@ -1,5 +1,12 @@
 {
     "cSpell.words": [
-        "Nikupangishe"
+        "appendonly",
+        "healthcheck",
+        "initdb",
+        "isready",
+        "Nikupangishe",
+        "ossp",
+        "postgis",
+        "requirepass"
     ]
 }
