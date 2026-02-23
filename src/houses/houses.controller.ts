@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import {
   Controller,
   Get,
@@ -21,6 +20,7 @@ import {
   ApiOperation,
   ApiBearerAuth,
   ApiConsumes,
+  ApiParam,
 } from '@nestjs/swagger';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
@@ -184,7 +184,6 @@ export class HousesController {
     const urls = files.map((f) => `/uploads/houses/${f.filename}`);
     const house = await this.housesService.findOne(id);
     house.photos = [...(house.photos || []), ...urls];
-    // Save directly to repo (simplified)
     return { message: 'Photos uploaded', urls };
   }
 }

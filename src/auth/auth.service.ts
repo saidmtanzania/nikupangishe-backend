@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Injectable,
@@ -131,13 +132,13 @@ export class AuthService {
 
     if (!user) throw new NotFoundException('User not found');
     if (user.phoneOtp !== otp) throw new BadRequestException('Invalid OTP');
-    if (new Date() > user.phoneOtpExpiresAt)
+    if (new Date() > (user.phoneOtpExpiresAt as Date))
       throw new BadRequestException('OTP has expired');
 
     user.isPhoneVerified = true;
     user.status = UserStatus.ACTIVE;
-    user.phoneOtp = null;
-    user.phoneOtpExpiresAt = null;
+    user.phoneOtp = null as any;
+    user.phoneOtpExpiresAt = null as any;
     await this.userRepository.save(user);
 
     const tokens = await this.generateTokens(user);
@@ -187,7 +188,7 @@ export class AuthService {
   }
 
   async logout(userId: string) {
-    await this.userRepository.update(userId, { refreshToken: null });
+    await this.userRepository.update(userId, { refreshToken: null as any });
     return { message: 'Logged out successfully' };
   }
 

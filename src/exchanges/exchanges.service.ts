@@ -100,13 +100,11 @@ export class ExchangesService {
   async ownerApprove(exchangeId: string, owner: User) {
     const exchange = await this.findOne(exchangeId);
 
-    const initiatorHouse = await this.houseRepository.findOne({
-      where: {
-        id:
-          exchange.initiatorTenancy?.house?.id ??
-          (await this.getInitiatorHouseId(exchange)),
-      },
-    });
+    const initiatorHouseId = await this.getInitiatorHouseId(exchange);
+
+    const initiatorHouse = initiatorHouseId
+      ? await this.houseRepository.findOne({ where: { id: initiatorHouseId } })
+      : null;
 
     const targetHouse = await this.houseRepository.findOne({
       where: { id: exchange.targetHouseId },
@@ -133,7 +131,6 @@ export class ExchangesService {
       exchange.status = ExchangeStatus.TARGET_OWNER_APPROVED;
     }
 
-    // If both owners approved, complete the exchange
     if (exchange.initiatorOwnerApproved && exchange.targetOwnerApproved) {
       exchange.status = ExchangeStatus.BOTH_OWNERS_APPROVED;
       await this.exchangeRepository.save(exchange);
@@ -246,6 +243,6 @@ export class ExchangesService {
     const tenancy = await this.tenancyRepository.findOne({
       where: { id: exchange.initiatorTenancyId },
     });
-    return tenancy?.houseId;
+    return tenancy?.houseId ?? '';
   }
 }

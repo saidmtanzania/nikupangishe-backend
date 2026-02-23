@@ -70,16 +70,14 @@ export class User {
   isEmailVerified: boolean;
 
   @Column({ nullable: true })
-  @Exclude()
-  phoneOtp: string;
+  phoneOtp: string | null;
+
+  @Column({ nullable: true })
+  phoneOtpExpiresAt: Date | null;
 
   @Column({ nullable: true })
   @Exclude()
-  phoneOtpExpiresAt: Date;
-
-  @Column({ nullable: true })
-  @Exclude()
-  refreshToken: string;
+  refreshToken: string | null;
 
   @Column({ nullable: true })
   lastLoginAt: Date;

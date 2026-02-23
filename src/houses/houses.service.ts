@@ -4,12 +4,12 @@ import {
   ForbiddenException,
   BadRequestException,
   ConflictException,
+  Inject,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Inject } from '@nestjs/common';
-import { Cache } from 'cache-manager';
+import type { Cache } from 'cache-manager';
 import { House, HouseStatus } from './entities/house.entity';
 import { HouseAgent, HouseAgentStatus } from './entities/house-agent.entity';
 import {
@@ -108,10 +108,10 @@ export class HousesService {
     return result;
   }
 
-  async findOne(id: string, isPublic = false) {
+  async findOne(id: string, isPublic = false): Promise<House> {
     const cacheKey = `house:${id}`;
     if (isPublic) {
-      const cached = await this.cacheManager.get(cacheKey);
+      const cached = await this.cacheManager.get<House>(cacheKey);
       if (cached) return cached;
     }
 
@@ -239,7 +239,7 @@ export class HousesService {
       house.status = HouseStatus.ACTIVE;
       house.verifiedAt = new Date();
       house.verifiedBy = admin.id;
-      house.verificationNotes = dto.notes;
+      house.verificationNotes = dto.notes ?? '';
     } else {
       if (!dto.rejectionReason) {
         throw new BadRequestException('Rejection reason is required');
