@@ -70,15 +70,16 @@ export class ViewingsService {
   }
 
   async getViewingsForAgent(agentId: string) {
-    return this.viewingRepository.find({
+    const viewings = await this.viewingRepository.find({
       where: { assignedAgentId: agentId },
       relations: ['house', 'tenant'],
       order: { preferredDate: 'ASC' },
     });
+    return viewings.map((v) => this.toFrontendFormat(v));
   }
 
   async getViewingsForOwner(ownerId: string) {
-    return this.viewingRepository
+    const viewings = await this.viewingRepository
       .createQueryBuilder('v')
       .leftJoinAndSelect('v.house', 'house')
       .leftJoinAndSelect('v.tenant', 'tenant')
@@ -86,14 +87,16 @@ export class ViewingsService {
       .where('house.ownerId = :ownerId', { ownerId })
       .orderBy('v.preferredDate', 'ASC')
       .getMany();
+    return viewings.map((v) => this.toFrontendFormat(v));
   }
 
   async getViewingsForTenant(tenantId: string) {
-    return this.viewingRepository.find({
+    const viewings = await this.viewingRepository.find({
       where: { tenantId },
       relations: ['house', 'assignedAgent'],
       order: { createdAt: 'DESC' },
     });
+    return viewings.map((v) => this.toFrontendFormat(v));
   }
 
   async updateViewing(id: string, dto: UpdateViewingDto, user: User) {
@@ -118,7 +121,8 @@ export class ViewingsService {
       viewing.confirmedDate = new Date(dto.confirmedDate);
     }
 
-    return this.viewingRepository.save(viewing);
+    const saved = await this.viewingRepository.save(viewing);
+    return this.toFrontendFormat(saved);
   }
 
   async findOne(id: string) {
@@ -127,6 +131,52 @@ export class ViewingsService {
       relations: ['house', 'tenant', 'assignedAgent'],
     });
     if (!viewing) throw new NotFoundException('Viewing not found');
-    return viewing;
+    return this.toFrontendFormat(viewing);
+  }
+
+  /**
+   * Map backend ViewingRequest to frontend Viewing shape:
+   * { id, agentId, tenantName, propertyTitle, time, status }
+   */
+  private toFrontendFormat(viewing: ViewingRequest): any {
+    // Map statuses: pending/confirmed → upcoming, no_show → cancelled
+    let frontendStatus: 'upcoming' | 'completed' | 'cancelled' = 'upcoming';
+    switch (viewing.status) {
+      case ViewingStatus.PENDING:
+      case ViewingStatus.CONFIRMED:
+        frontendStatus = 'upcoming';
+        break;
+      case ViewingStatus.COMPLETED:
+        frontendStatus = 'completed';
+        break;
+      case ViewingStatus.CANCELLED:
+      case ViewingStatus.NO_SHOW:
+        frontendStatus = 'cancelled';
+        break;
+    }
+
+    // Get tenant name from the relation
+    let tenantName = 'Unknown';
+    if (viewing.tenant) {
+      const t = viewing.tenant;
+      tenantName =
+        `${t.firstName || ''} ${t.lastName || ''}`.trim() || 'Unknown';
+    }
+
+    // Use confirmedDate if available, otherwise preferredDate
+    const time = viewing.confirmedDate
+      ? viewing.confirmedDate.toISOString()
+      : viewing.preferredDate
+        ? viewing.preferredDate.toISOString()
+        : '';
+
+    return {
+      id: viewing.id,
+      agentId: viewing.assignedAgentId || '',
+      tenantName,
+      propertyTitle: viewing.house?.title || 'Unknown Property',
+      time,
+      status: frontendStatus,
+    };
   }
 }

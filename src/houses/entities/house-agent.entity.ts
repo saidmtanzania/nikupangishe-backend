@@ -64,4 +64,5 @@ export class HouseAgent {
 
   @UpdateDateColumn()
   updatedAt: Date;
+  agentProfileId: string | undefined;
 }

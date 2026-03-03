@@ -6,11 +6,12 @@ import { ChatController } from './chat.controller';
 import { ChatMessage } from './entities/chat-message.entity';
 import { User } from '../users/entities/user.entity';
 import { Notification } from '../notifications/entities/notification.entity';
+import { House } from '../houses/entities/house.entity';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ChatMessage, User, Notification]),
+    TypeOrmModule.forFeature([ChatMessage, User, Notification, House]),
     AuthModule,
   ],
   providers: [ChatGateway, ChatService],

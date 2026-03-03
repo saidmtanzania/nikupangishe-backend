@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Controller,
@@ -150,7 +152,7 @@ export class HousesController {
     return this.housesService.verifyHouse(id, dto, user);
   }
 
-  // Photo upload
+  // Photo upload - accepts both 'photos' and 'images' field names
   @Post(':id/photos')
   @Roles(UserRole.OWNER)
   @ApiBearerAuth()
@@ -182,8 +184,43 @@ export class HousesController {
     @CurrentUser() _user: User,
   ) {
     const urls = files.map((f) => `/uploads/houses/${f.filename}`);
-    const house = await this.housesService.findOne(id);
-    house.photos = [...(house.photos || []), ...urls];
-    return { message: 'Photos uploaded', urls };
+    await this.housesService.addPhotos(id, urls);
+    return { message: 'Photos uploaded', images: urls, urls };
+  }
+
+  // Alias endpoint for frontend that sends 'images' field name
+  @Post(':id/images')
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload house images (alias for photos) [OWNER]' })
+  @UseInterceptors(
+    FilesInterceptor('images', 20, {
+      storage: diskStorage({
+        destination: './uploads/houses',
+        filename: (_req, file, cb) => {
+          const uniqueSuffix =
+            Date.now() + '-' + Math.round(Math.random() * 1e9);
+          cb(null, `house-${uniqueSuffix}${extname(file.originalname)}`);
+        },
+      }),
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.match(/\/(jpg|jpeg|png|webp)$/)) {
+          cb(new Error('Only image files are allowed'), false);
+        } else {
+          cb(null, true);
+        }
+      },
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    }),
+  )
+  async uploadImages(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFiles() files: Express.Multer.File[],
+    @CurrentUser() _user: User,
+  ) {
+    const urls = files.map((f) => `/uploads/houses/${f.filename}`);
+    await this.housesService.addPhotos(id, urls);
+    return { message: 'Images uploaded', images: urls, urls };
   }
 }

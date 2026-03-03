@@ -31,6 +31,10 @@ export enum HouseType {
   ROOM = 'room',
   VILLA = 'villa',
   TOWNHOUSE = 'townhouse',
+  // Frontend-compatible types
+  STANDALONE = 'standalone',
+  SINGLE_ROOM = 'single-room',
+  COMMERCIAL = 'commercial',
 }
 
 export enum FurnishingStatus {
@@ -164,6 +168,16 @@ export class House {
 
   @Column({ type: 'jsonb', nullable: true })
   rules: string[]; // No smoking, no parties, etc.
+
+  // Frontend-compatible fields
+  @Column({ default: false })
+  isUnique: boolean;
+
+  @Column({ default: false })
+  isOpenToExchange: boolean;
+
+  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+  squareMeters: number; // Frontend uses this as 'area' (number)
 
   @CreateDateColumn()
   createdAt: Date;

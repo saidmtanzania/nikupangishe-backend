@@ -174,29 +174,47 @@ export class ExchangesService {
       where: { id },
       relations: [
         'initiatorTenant',
+        'initiatorTenant.user',
         'initiatorTenancy',
         'initiatorTenancy.house',
         'targetHouse',
         'targetTenant',
+        'targetTenant.user',
       ],
     });
     if (!exchange) throw new NotFoundException('Exchange request not found');
     return exchange;
   }
 
+  /**
+   * Returns a single exchange in the frontend ExchangeRequest format.
+   */
+  async findOneFormatted(id: string): Promise<any> {
+    const exchange = await this.findOne(id);
+    return this.toFrontendFormat(exchange);
+  }
+
   async getExchangesForTenant(tenantProfileId: string) {
-    return this.exchangeRepository.find({
+    const exchanges = await this.exchangeRepository.find({
       where: { initiatorTenantId: tenantProfileId },
-      relations: ['targetHouse', 'initiatorTenancy'],
+      relations: [
+        'targetHouse',
+        'initiatorTenancy',
+        'initiatorTenancy.house',
+        'initiatorTenant',
+        'initiatorTenant.user',
+      ],
       order: { createdAt: 'DESC' },
     });
+    return exchanges.map((e) => this.toFrontendFormat(e));
   }
 
   async getExchangesForOwner(ownerId: string) {
-    return this.exchangeRepository
+    const exchanges = await this.exchangeRepository
       .createQueryBuilder('ex')
       .leftJoinAndSelect('ex.targetHouse', 'targetHouse')
       .leftJoinAndSelect('ex.initiatorTenant', 'initiatorTenant')
+      .leftJoinAndSelect('initiatorTenant.user', 'initiatorUser')
       .leftJoinAndSelect('ex.initiatorTenancy', 'initiatorTenancy')
       .leftJoinAndSelect('initiatorTenancy.house', 'initiatorHouse')
       .where(
@@ -205,6 +223,7 @@ export class ExchangesService {
       )
       .orderBy('ex.createdAt', 'DESC')
       .getMany();
+    return exchanges.map((e) => this.toFrontendFormat(e));
   }
 
   // Confirm tenancy - owner verifies tenant lives in house
@@ -244,5 +263,61 @@ export class ExchangesService {
       where: { id: exchange.initiatorTenancyId },
     });
     return tenancy?.houseId ?? '';
+  }
+
+  /**
+   * Map backend ExchangeRequest entity to frontend ExchangeRequest shape.
+   * Frontend expects: { id, fromTenantId, fromTenantName, fromPropertyId,
+   *   fromPropertyTitle, toPropertyId, toPropertyTitle, status, createdAt, reason }
+   */
+  private toFrontendFormat(exchange: ExchangeRequest): any {
+    // Map complex statuses to simple frontend statuses
+    let frontendStatus: 'pending' | 'approved' | 'rejected' | 'completed' =
+      'pending';
+    switch (exchange.status) {
+      case ExchangeStatus.PENDING:
+      case ExchangeStatus.INITIATOR_OWNER_APPROVED:
+      case ExchangeStatus.TARGET_OWNER_APPROVED:
+        frontendStatus = 'pending';
+        break;
+      case ExchangeStatus.BOTH_OWNERS_APPROVED:
+        frontendStatus = 'approved';
+        break;
+      case ExchangeStatus.COMPLETED:
+        frontendStatus = 'completed';
+        break;
+      case ExchangeStatus.REJECTED:
+      case ExchangeStatus.CANCELLED:
+        frontendStatus = 'rejected';
+        break;
+    }
+
+    // Get tenant name from the initiatorTenant -> user relation
+    let fromTenantName = 'Unknown';
+    if (exchange.initiatorTenant?.user) {
+      const u = exchange.initiatorTenant.user;
+      fromTenantName =
+        `${u.firstName || ''} ${u.lastName || ''}`.trim() || 'Unknown';
+    }
+
+    // Get from property (initiator's current house via tenancy)
+    const fromPropertyId = exchange.initiatorTenancy?.houseId || '';
+    const fromPropertyTitle =
+      exchange.initiatorTenancy?.house?.title || 'Unknown Property';
+
+    return {
+      id: exchange.id,
+      fromTenantId: exchange.initiatorTenantId,
+      fromTenantName,
+      fromPropertyId,
+      fromPropertyTitle,
+      toPropertyId: exchange.targetHouseId,
+      toPropertyTitle: exchange.targetHouse?.title || 'Unknown Property',
+      status: frontendStatus,
+      createdAt: exchange.createdAt
+        ? exchange.createdAt.toISOString()
+        : new Date().toISOString(),
+      reason: exchange.notes || exchange.rejectionReason || '',
+    };
   }
 }

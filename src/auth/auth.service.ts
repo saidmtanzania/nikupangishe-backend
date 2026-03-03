@@ -31,7 +31,36 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto) {
-    const { email, phone, role, password, firstName, lastName } = registerDto;
+    let { email, phone, role, password, firstName, lastName } = registerDto;
+
+    // Frontend sends 'name' as single field — split into firstName/lastName
+    if (!firstName && !lastName && (registerDto as any).name) {
+      const parts = ((registerDto as any).name as string).trim().split(/\s+/);
+      firstName = parts[0] || 'User';
+      lastName = parts.slice(1).join(' ') || '';
+    }
+
+    if (!firstName) {
+      firstName = 'User';
+    }
+    if (!lastName) {
+      lastName = '';
+    }
+
+    // Normalize phone: frontend may send 9 digits without +255 prefix or with spaces
+    phone = phone.replace(/\s+/g, '');
+    if (/^\d{9}$/.test(phone)) {
+      phone = `+255${phone}`;
+    } else if (/^0\d{9}$/.test(phone)) {
+      phone = `+255${phone.slice(1)}`;
+    } else if (/^255\d{9}$/.test(phone)) {
+      phone = `+${phone}`;
+    }
+
+    // Default password if not provided (frontend first-step registration may not include it)
+    if (!password) {
+      password = 'Temp@' + Math.random().toString(36).slice(2, 10);
+    }
 
     // Check duplicate email/phone
     const existingUser = await this.userRepository.findOne({
@@ -75,14 +104,12 @@ export class AuthService {
       await this.tenantProfileRepository.save(tenantProfile);
     }
 
-    // Generate OTP for phone verification (in real app, send via SMS)
+    // Generate 4-digit OTP for phone verification (matching frontend)
     const otp = this.generateOtp();
+    console.log(`Generated OTP for ${phone}: ${otp}`);
     user.phoneOtp = otp;
     user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await this.userRepository.save(user);
-
-    // TODO: Send OTP via SMS (integrate with Africa's Talking or similar)
-    console.log(`OTP for ${phone}: ${otp}`); // Remove in production
 
     return {
       message: 'Registration successful. Please verify your phone number.',
@@ -128,6 +155,16 @@ export class AuthService {
   }
 
   async verifyPhone(phone: string, otp: string) {
+    // Normalize phone
+    phone = phone.replace(/\s+/g, '');
+    if (/^\d{9}$/.test(phone)) {
+      phone = `+255${phone}`;
+    } else if (/^0\d{9}$/.test(phone)) {
+      phone = `+255${phone.slice(1)}`;
+    } else if (/^255\d{9}$/.test(phone)) {
+      phone = `+${phone}`;
+    }
+
     const user = await this.userRepository.findOne({ where: { phone } });
 
     if (!user) throw new NotFoundException('User not found');
@@ -153,6 +190,16 @@ export class AuthService {
   }
 
   async resendOtp(phone: string) {
+    // Normalize phone
+    phone = phone.replace(/\s+/g, '');
+    if (/^\d{9}$/.test(phone)) {
+      phone = `+255${phone}`;
+    } else if (/^0\d{9}$/.test(phone)) {
+      phone = `+255${phone.slice(1)}`;
+    } else if (/^255\d{9}$/.test(phone)) {
+      phone = `+${phone}`;
+    }
+
     const user = await this.userRepository.findOne({ where: { phone } });
     if (!user) throw new NotFoundException('User not found');
     if (user.isPhoneVerified)
@@ -234,7 +281,8 @@ export class AuthService {
   }
 
   private generateOtp(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    // 4-digit OTP to match frontend verification UI
+    return Math.floor(1000 + Math.random() * 9000).toString();
   }
 
   private sanitizeUser(user: User) {
@@ -243,8 +291,14 @@ export class AuthService {
       phoneOtp,
       phoneOtpExpiresAt,
       refreshToken,
-      ...sanitized
+      ...rest
     } = user;
-    return sanitized;
+    return {
+      ...rest,
+      // Frontend-compatible fields
+      name: `${user.firstName} ${user.lastName}`.trim(),
+      avatar: user.avatar || null,
+      isVerified: user.isPhoneVerified,
+    };
   }
 }

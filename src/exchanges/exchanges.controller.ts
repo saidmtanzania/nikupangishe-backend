@@ -52,7 +52,7 @@ export class ExchangesController {
   @Get(':id')
   @ApiOperation({ summary: 'Get exchange request details' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.exchangesService.findOne(id);
+    return this.exchangesService.findOneFormatted(id);
   }
 
   @Patch(':id/approve')

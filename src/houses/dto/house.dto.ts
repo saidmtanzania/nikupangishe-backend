@@ -27,41 +27,71 @@ export class CreateHouseDto {
   @IsNotEmpty()
   description: string;
 
-  @ApiProperty({ enum: HouseType })
-  @IsEnum(HouseType)
-  houseType: HouseType;
+  @ApiPropertyOptional({
+    enum: HouseType,
+    description: 'House type (also accepts frontend propertyType values)',
+  })
+  @IsOptional()
+  @IsString()
+  houseType?: string;
 
-  @ApiProperty({ enum: FurnishingStatus })
+  @ApiPropertyOptional({
+    description: 'Frontend-compatible property type alias',
+  })
+  @IsOptional()
+  @IsString()
+  propertyType?: string;
+
+  @ApiPropertyOptional({ enum: FurnishingStatus })
+  @IsOptional()
   @IsEnum(FurnishingStatus)
-  furnishingStatus: FurnishingStatus;
+  furnishingStatus?: FurnishingStatus;
 
-  @ApiProperty({ example: 'Plot 45, Haile Selassie Road' })
+  @ApiPropertyOptional({ example: 'Plot 45, Haile Selassie Road' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  address: string;
+  address?: string;
 
-  @ApiProperty({ example: 'Masaki' })
+  @ApiPropertyOptional({
+    example: 'Masaki',
+    description: 'Neighborhood/ward name',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  area: string;
+  area?: string;
 
-  @ApiProperty({ example: 'Dar es Salaam' })
+  @ApiPropertyOptional({ example: 'Dar es Salaam' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  city: string;
+  city?: string;
 
-  @ApiProperty({ example: -6.7734 })
+  @ApiPropertyOptional({ example: -6.7734 })
+  @IsOptional()
   @IsNumber()
-  latitude: number;
+  latitude?: number;
 
-  @ApiProperty({ example: 39.2687 })
+  @ApiPropertyOptional({ example: 39.2687 })
+  @IsOptional()
   @IsNumber()
-  longitude: number;
+  longitude?: number;
 
-  @ApiProperty({ example: 800000 })
+  @ApiPropertyOptional({
+    example: 800000,
+    description: 'Monthly rent (backend: rentAmount, frontend: price)',
+  })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  rentAmount: number;
+  rentAmount?: number;
+
+  @ApiPropertyOptional({
+    example: 800000,
+    description: 'Frontend price field (alias for rentAmount)',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  price?: number;
 
   @ApiPropertyOptional({ example: 'TZS' })
   @IsOptional()
@@ -73,15 +103,24 @@ export class CreateHouseDto {
   @IsNumber()
   depositMonths?: number;
 
-  @ApiProperty({ example: 2 })
+  @ApiPropertyOptional({ example: 2 })
+  @IsOptional()
   @IsNumber()
-  @Min(1)
-  bedrooms: number;
+  @Min(0)
+  bedrooms?: number;
 
-  @ApiProperty({ example: 1 })
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
   @IsNumber()
-  @Min(1)
-  bathrooms: number;
+  @Min(0)
+  bathrooms?: number;
+
+  @ApiPropertyOptional({
+    description: 'Square meters (frontend sends as area)',
+  })
+  @IsOptional()
+  @IsNumber()
+  squareMeters?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -142,6 +181,31 @@ export class CreateHouseDto {
   @IsOptional()
   @IsArray()
   rules?: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    description: 'Image URLs (frontend sends as images)',
+  })
+  @IsOptional()
+  @IsArray()
+  images?: string[];
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isUnique?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isOpenToExchange?: boolean;
+
+  // Frontend may send location as nested object
+  @ApiPropertyOptional({
+    description: 'Location object { lat, lng, neighborhood, city }',
+  })
+  @IsOptional()
+  location?: { lat: number; lng: number; neighborhood: string; city: string };
 }
 
 export class UpdateHouseDto extends PartialType(CreateHouseDto) {}
@@ -157,10 +221,19 @@ export class HouseFilterDto {
   @IsString()
   area?: string;
 
-  @ApiPropertyOptional({ enum: HouseType })
+  @ApiPropertyOptional({
+    description: 'House type or comma-separated property types',
+  })
   @IsOptional()
-  @IsEnum(HouseType)
-  houseType?: HouseType;
+  @IsString()
+  houseType?: string;
+
+  @ApiPropertyOptional({
+    description: 'Frontend-compatible type filter (comma-separated)',
+  })
+  @IsOptional()
+  @IsString()
+  type?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -168,11 +241,23 @@ export class HouseFilterDto {
   @IsNumber()
   minRent?: number;
 
+  @ApiPropertyOptional({ description: 'Frontend alias for minRent' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  minPrice?: number;
+
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   maxRent?: number;
+
+  @ApiPropertyOptional({ description: 'Frontend alias for maxRent' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  maxPrice?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -195,6 +280,16 @@ export class HouseFilterDto {
   @IsOptional()
   @IsBoolean()
   hasElectricity?: boolean;
+
+  @ApiPropertyOptional({ description: 'Only verified houses' })
+  @IsOptional()
+  @IsString()
+  verified?: string;
+
+  @ApiPropertyOptional({ description: 'Only houses open to exchange' })
+  @IsOptional()
+  @IsString()
+  swapOnly?: string;
 
   // Pagination
   @ApiPropertyOptional({ default: 1 })
@@ -228,6 +323,14 @@ export class HouseFilterDto {
   @Type(() => Number)
   @IsNumber()
   radius?: number;
+
+  // Text search
+  @ApiPropertyOptional({
+    description: 'Search query (matches title, neighborhood, city)',
+  })
+  @IsOptional()
+  @IsString()
+  q?: string;
 }
 
 export class AssignAgentDto {

@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Injectable,
   NotFoundException,
@@ -10,7 +13,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
-import { House, HouseStatus } from './entities/house.entity';
+import { House, HouseStatus, HouseType } from './entities/house.entity';
 import { HouseAgent, HouseAgentStatus } from './entities/house-agent.entity';
 import {
   AgentProfile,
@@ -43,28 +46,67 @@ export class HousesService {
       throw new ForbiddenException('Only property owners can list houses');
     }
 
-    // Check for duplicate listing by proximity (within 20m radius)
-    const nearby = await this.checkForDuplicateByGPS(
-      createHouseDto.latitude,
-      createHouseDto.longitude,
-      owner.id,
-    );
+    // Normalize frontend fields
+    this.normalizeHouseDto(createHouseDto);
 
-    if (nearby) {
-      throw new ConflictException(
-        'A house already exists at this location. Duplicate listings are not allowed.',
+    const latitude = createHouseDto.latitude;
+    const longitude = createHouseDto.longitude;
+
+    if (latitude && longitude) {
+      // Check for duplicate listing by proximity (within 20m radius)
+      const nearby = await this.checkForDuplicateByGPS(
+        latitude,
+        longitude,
+        owner.id,
       );
+
+      if (nearby) {
+        throw new ConflictException(
+          'A house already exists at this location. Duplicate listings are not allowed.',
+        );
+      }
     }
 
     const house = this.houseRepository.create({
-      ...createHouseDto,
+      title: createHouseDto.title,
+      description: createHouseDto.description,
+      houseType: (createHouseDto.houseType ||
+        createHouseDto.propertyType) as HouseType,
+      furnishingStatus: createHouseDto.furnishingStatus,
+      address: createHouseDto.address,
+      area: createHouseDto.area,
+      city: createHouseDto.city,
+      latitude: createHouseDto.latitude,
+      longitude: createHouseDto.longitude,
+      rentAmount: createHouseDto.rentAmount ?? createHouseDto.price,
+      currency: createHouseDto.currency,
+      depositMonths: createHouseDto.depositMonths,
+      bedrooms: createHouseDto.bedrooms,
+      bathrooms: createHouseDto.bathrooms,
+      parkingSpaces: createHouseDto.parkingSpaces,
+      hasWater: createHouseDto.hasWater,
+      hasElectricity: createHouseDto.hasElectricity,
+      hasInternet: createHouseDto.hasInternet,
+      hasGarden: createHouseDto.hasGarden,
+      hasSecurityGuard: createHouseDto.hasSecurityGuard,
+      hasCCTV: createHouseDto.hasCCTV,
+      petFriendly: createHouseDto.petFriendly,
+      photos: (createHouseDto as any).photos ?? createHouseDto.images ?? [],
+      videos: (createHouseDto as any).videos ?? [],
+      availableFrom: createHouseDto.availableFrom,
+      minimumLeaseDuration: createHouseDto.minimumLeaseDuration,
+      amenities: createHouseDto.amenities,
+      rules: createHouseDto.rules,
+      isUnique: createHouseDto.isUnique,
+      isOpenToExchange: createHouseDto.isOpenToExchange,
+      squareMeters: createHouseDto.squareMeters,
       ownerId: owner.id,
       status: HouseStatus.PENDING_VERIFICATION,
     });
 
     const saved = await this.houseRepository.save(house);
     await this.invalidateListingsCache();
-    return saved;
+    return this.toFrontendFormat(saved);
   }
 
   async findAll(filters: HouseFilterDto) {
@@ -95,7 +137,7 @@ export class HousesService {
     const [houses, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
     const result = {
-      data: houses,
+      data: houses.map((h) => this.toFrontendFormat(h)),
       meta: {
         total,
         page,
@@ -108,11 +150,11 @@ export class HousesService {
     return result;
   }
 
-  async findOne(id: string, isPublic = false): Promise<House> {
+  async findOne(id: string, isPublic = false): Promise<any> {
     const cacheKey = `house:${id}`;
     if (isPublic) {
       const cached = await this.cacheManager.get<House>(cacheKey);
-      if (cached) return cached;
+      if (cached) return this.toFrontendFormat(cached);
     }
 
     const house = await this.houseRepository.findOne({
@@ -136,11 +178,11 @@ export class HousesService {
       await this.cacheManager.set(cacheKey, house, 300);
     }
 
-    return house;
+    return this.toFrontendFormat(house);
   }
 
   async update(id: string, updateDto: UpdateHouseDto, user: User) {
-    const house = await this.findOne(id);
+    const house = await this.findOneRaw(id);
     this.assertOwnership(house, user);
 
     // If owner updates details, put back to pending verification
@@ -162,7 +204,7 @@ export class HousesService {
   }
 
   async remove(id: string, user: User) {
-    const house = await this.findOne(id);
+    const house = await this.findOneRaw(id);
     this.assertOwnership(house, user);
     house.status = HouseStatus.INACTIVE;
     await this.houseRepository.save(house);
@@ -171,7 +213,7 @@ export class HousesService {
   }
 
   async assignAgent(houseId: string, dto: AssignAgentDto, owner: User) {
-    const house = await this.findOne(houseId);
+    const house = await this.findOneRaw(houseId);
     this.assertOwnership(house, owner);
 
     const agent = await this.agentProfileRepository.findOne({
@@ -212,7 +254,7 @@ export class HousesService {
   }
 
   async removeAgent(houseId: string, agentId: string, owner: User) {
-    const house = await this.findOne(houseId);
+    const house = await this.findOneRaw(houseId);
     this.assertOwnership(house, owner);
 
     const assignment = await this.houseAgentRepository.findOne({
@@ -229,7 +271,7 @@ export class HousesService {
     if (admin.role !== UserRole.ADMIN)
       throw new ForbiddenException('Admin access required');
 
-    const house = await this.findOne(id);
+    const house = await this.findOneRaw(id);
 
     if (house.status !== HouseStatus.PENDING_VERIFICATION) {
       throw new BadRequestException('House is not pending verification');
@@ -275,6 +317,29 @@ export class HousesService {
     });
   }
 
+  /**
+   * Add photos/images to a house (used by upload endpoints).
+   */
+  async addPhotos(id: string, urls: string[]): Promise<void> {
+    const house = await this.houseRepository.findOneBy({ id });
+    if (!house) throw new NotFoundException('House not found');
+    house.photos = [...(house.photos || []), ...urls];
+    await this.houseRepository.save(house);
+    await this.invalidateHouseCache(id);
+  }
+
+  /**
+   * Get raw house entity by ID (for internal use, not frontend-formatted).
+   */
+  async findOneRaw(id: string): Promise<House> {
+    const house = await this.houseRepository.findOne({
+      where: { id },
+      relations: ['owner', 'agentAssignments'],
+    });
+    if (!house) throw new NotFoundException('House not found');
+    return house;
+  }
+
   // Private helpers
   private assertOwnership(house: House, user: User) {
     if (house.ownerId !== user.id && user.role !== UserRole.ADMIN) {
@@ -291,20 +356,38 @@ export class HousesService {
         area: `%${filters.area}%`,
       });
     }
-    if (filters.houseType) {
-      qb.andWhere('house.houseType = :type', { type: filters.houseType });
+
+    // Text search (frontend sends 'q' param)
+    if (filters.q) {
+      qb.andWhere(
+        '(LOWER(house.title) LIKE LOWER(:q) OR LOWER(house.area) LIKE LOWER(:q) OR LOWER(house.city) LIKE LOWER(:q))',
+        { q: `%${filters.q}%` },
+      );
     }
-    if (filters.minRent !== undefined) {
-      qb.andWhere('house.rentAmount >= :minRent', { minRent: filters.minRent });
+
+    // Support both houseType and type (frontend sends comma-separated types)
+    const typeFilter = filters.houseType || filters.type;
+    if (typeFilter) {
+      const types = typeFilter.split(',').map((t) => t.trim());
+      qb.andWhere('house.houseType IN (:...types)', { types });
     }
-    if (filters.maxRent !== undefined) {
-      qb.andWhere('house.rentAmount <= :maxRent', { maxRent: filters.maxRent });
+
+    // Support both minRent/maxRent and minPrice/maxPrice (frontend aliases)
+    const minRent = filters.minRent ?? filters.minPrice;
+    const maxRent = filters.maxRent ?? filters.maxPrice;
+    if (minRent !== undefined) {
+      qb.andWhere('house.rentAmount >= :minRent', { minRent });
+    }
+    if (maxRent !== undefined) {
+      qb.andWhere('house.rentAmount <= :maxRent', { maxRent });
     }
     if (filters.bedrooms !== undefined) {
-      qb.andWhere('house.bedrooms = :bedrooms', { bedrooms: filters.bedrooms });
+      qb.andWhere('house.bedrooms >= :bedrooms', {
+        bedrooms: filters.bedrooms,
+      });
     }
     if (filters.bathrooms !== undefined) {
-      qb.andWhere('house.bathrooms = :bathrooms', {
+      qb.andWhere('house.bathrooms >= :bathrooms', {
         bathrooms: filters.bathrooms,
       });
     }
@@ -315,6 +398,16 @@ export class HousesService {
       qb.andWhere('house.hasElectricity = :hasElectricity', {
         hasElectricity: filters.hasElectricity,
       });
+    }
+
+    // Frontend verified filter
+    if (filters.verified === 'true') {
+      // Already filtered by ACTIVE status which means verified
+    }
+
+    // Frontend swap-only filter
+    if (filters.swapOnly === 'true') {
+      qb.andWhere('house.isOpenToExchange = true');
     }
 
     // GPS proximity search using Haversine formula in PostgreSQL
@@ -356,5 +449,108 @@ export class HousesService {
     // For now, delete common cache keys
     const keys = ['houses:list:{}'];
     await Promise.all(keys.map((k) => this.cacheManager.del(k)));
+  }
+
+  /**
+   * Normalize incoming DTO from frontend field names to backend columns.
+   * Frontend sends: price, images, propertyType, location object, area (sqm)
+   * Backend expects: rentAmount, photos, houseType, lat/lng/area/city, squareMeters
+   */
+  private normalizeHouseDto(dto: any): void {
+    // price -> rentAmount
+    if (dto.price !== undefined && dto.rentAmount === undefined) {
+      dto.rentAmount = dto.price;
+    }
+    // images -> photos
+    if (dto.images !== undefined && dto.photos === undefined) {
+      dto.photos = dto.images;
+    }
+    // propertyType -> houseType
+    if (dto.propertyType !== undefined && dto.houseType === undefined) {
+      dto.houseType = dto.propertyType;
+    }
+    // location object -> flat fields
+    if (dto.location && typeof dto.location === 'object') {
+      if (dto.location.lat !== undefined && dto.latitude === undefined) {
+        dto.latitude = dto.location.lat;
+      }
+      if (dto.location.lng !== undefined && dto.longitude === undefined) {
+        dto.longitude = dto.location.lng;
+      }
+      if (dto.location.neighborhood && dto.area === undefined) {
+        dto.area = dto.location.neighborhood;
+      }
+      if (dto.location.city && dto.city === undefined) {
+        dto.city = dto.location.city;
+      }
+      if (dto.location.address && dto.address === undefined) {
+        dto.address = dto.location.address;
+      }
+    }
+    // area (number = sqm) -> squareMeters (if area is a number, not a string neighborhood)
+    if (typeof dto.area === 'number') {
+      dto.squareMeters = dto.area;
+      delete dto.area; // remove so it doesn't conflict with area (neighborhood string)
+    }
+  }
+
+  /**
+   * Transform a House entity to the frontend Property interface shape.
+   */
+  private toFrontendFormat(house: House): any {
+    // Map backend status to frontend status
+    let frontendStatus: 'available' | 'occupied' | 'pending' = 'pending';
+    if (house.status === HouseStatus.ACTIVE) {
+      frontendStatus = 'available';
+    } else if (house.status === HouseStatus.RENTED) {
+      frontendStatus = 'occupied';
+    } else if (
+      house.status === HouseStatus.DRAFT ||
+      house.status === HouseStatus.PENDING_VERIFICATION
+    ) {
+      frontendStatus = 'pending';
+    }
+
+    // Get primary agent ID if available
+    let agentId: string | undefined;
+    if (house.agentAssignments && house.agentAssignments.length > 0) {
+      const primary = house.agentAssignments.find((a) => a.isPrimary);
+      agentId = primary ? primary.agentId : house.agentAssignments[0].agentId;
+    }
+
+    return {
+      id: house.id,
+      title: house.title,
+      description: house.description,
+      price: Number(house.rentAmount),
+      location: {
+        lat: Number(house.latitude),
+        lng: Number(house.longitude),
+        neighborhood: house.area || '',
+        city: house.city || '',
+      },
+      images: house.photos || [],
+      bedrooms: house.bedrooms,
+      bathrooms: house.bathrooms,
+      area: house.squareMeters ? Number(house.squareMeters) : 0,
+      propertyType: house.houseType,
+      amenities: house.amenities || [],
+      isVerified: house.status === HouseStatus.ACTIVE && !!house.verifiedAt,
+      isUnique: house.isUnique || false,
+      isOpenToExchange: house.isOpenToExchange || false,
+      ownerId: house.ownerId,
+      agentId,
+      status: frontendStatus,
+      createdAt: house.createdAt
+        ? house.createdAt.toISOString()
+        : new Date().toISOString(),
+      // Also include some backend-specific fields for completeness
+      currency: house.currency,
+      furnishingStatus: house.furnishingStatus,
+      hasWater: house.hasWater,
+      hasElectricity: house.hasElectricity,
+      hasInternet: house.hasInternet,
+      depositMonths: house.depositMonths,
+    };
   }
 }
