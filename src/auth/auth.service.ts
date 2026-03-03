@@ -1,3 +1,5 @@
+/* eslint-disable prefer-const */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
@@ -14,8 +16,15 @@ import { ConfigService } from '@nestjs/config';
 import { User, UserStatus, UserRole } from '../users/entities/user.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { TenantProfile } from '../tenants/entities/tenant-profile.entity';
-import { RegisterDto, LoginDto, ChangePasswordDto } from './dto/auth.dto';
+import {
+  RegisterDto,
+  LoginDto,
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+} from './dto/auth.dto';
 import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -253,6 +262,120 @@ export class AuthService {
     return { message: 'Password changed successfully' };
   }
 
+  async forgotPassword(dto: ForgotPasswordDto) {
+    // Determine the identifier: email, phone, or generic identifier field
+    let email: string | undefined = dto.email;
+    let phone: string | undefined = dto.phone;
+
+    if (dto.identifier) {
+      // Detect if identifier is email or phone
+      if (dto.identifier.includes('@')) {
+        email = dto.identifier;
+      } else {
+        phone = dto.identifier;
+      }
+    }
+
+    if (!email && !phone) {
+      throw new BadRequestException(
+        'Please provide an email address or phone number',
+      );
+    }
+
+    // Look up user by email or phone
+    let user: User | null = null;
+    if (email) {
+      user = await this.userRepository.findOne({
+        where: { email: email.toLowerCase() },
+      });
+    }
+    if (!user && phone) {
+      // Normalize phone
+      let normalized = phone.replace(/\s/g, '');
+      if (/^\d{9}$/.test(normalized)) {
+        normalized = '+255' + normalized;
+      } else if (/^0\d{9}$/.test(normalized)) {
+        normalized = '+255' + normalized.slice(1);
+      }
+      user = await this.userRepository.findOne({
+        where: { phone: normalized },
+      });
+    }
+
+    // Always return success to prevent user enumeration
+    if (!user) {
+      return {
+        message:
+          'If an account with that email/phone exists, you will receive reset instructions.',
+      };
+    }
+
+    // Generate a reset token (random hex string)
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
+
+    // Store hashed token and expiry (1 hour)
+    user.passwordResetToken = hashedToken;
+    user.passwordResetExpiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    await this.userRepository.save(user);
+
+    // TODO: Send the resetToken via email/SMS in production
+    // For development, include the token in the response
+    const isDev = this.configService.get('NODE_ENV') !== 'production';
+
+    return {
+      message:
+        'If an account with that email/phone exists, you will receive reset instructions.',
+      ...(isDev && {
+        resetToken,
+        resetUrl: `/auth/reset-password?token=${resetToken}`,
+      }),
+    };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    // Hash the incoming token to compare with stored hash
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(dto.token)
+      .digest('hex');
+
+    const user = await this.userRepository.findOne({
+      where: { passwordResetToken: hashedToken },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
+    if (
+      !user.passwordResetExpiresAt ||
+      user.passwordResetExpiresAt < new Date()
+    ) {
+      // Clear expired token
+      user.passwordResetToken = null;
+      user.passwordResetExpiresAt = null;
+      await this.userRepository.save(user);
+      throw new BadRequestException('Reset token has expired');
+    }
+
+    // Validate confirmPassword if provided
+    if (dto.confirmPassword && dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
+    // Set new password and clear reset fields
+    user.password = dto.newPassword;
+    user.passwordResetToken = null;
+    user.passwordResetExpiresAt = null;
+    await this.userRepository.save(user);
+
+    return { message: 'Password has been reset successfully' };
+  }
+
   async getProfile(userId: string) {
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -286,13 +409,8 @@ export class AuthService {
   }
 
   private sanitizeUser(user: User) {
-    const {
-      password,
-      phoneOtp,
-      phoneOtpExpiresAt,
-      refreshToken,
-      ...rest
-    } = user;
+    const { password, phoneOtp, phoneOtpExpiresAt, refreshToken, ...rest } =
+      user;
     return {
       ...rest,
       // Frontend-compatible fields

@@ -6,7 +6,6 @@ import {
   IsOptional,
   MinLength,
   MaxLength,
-  Matches,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole } from '../../users/entities/user.entity';
@@ -101,10 +100,28 @@ export class RefreshTokenDto {
 }
 
 export class ForgotPasswordDto {
-  @ApiProperty({ example: 'john@example.com' })
+  @ApiPropertyOptional({
+    example: 'john@example.com',
+    description: 'Email address (provide email or phone)',
+  })
+  @IsOptional()
   @IsEmail()
-  @IsNotEmpty()
-  email: string;
+  email?: string;
+
+  @ApiPropertyOptional({
+    example: '+255712345678',
+    description: 'Phone number (provide email or phone)',
+  })
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @ApiPropertyOptional({
+    description: 'Can send email or phone in a single identifier field',
+  })
+  @IsOptional()
+  @IsString()
+  identifier?: string;
 }
 
 export class ResetPasswordDto {
@@ -116,11 +133,12 @@ export class ResetPasswordDto {
   @ApiProperty({ minLength: 8 })
   @IsString()
   @MinLength(8)
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, {
-    message:
-      'Password must contain uppercase, lowercase, number and special character',
-  })
   newPassword: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  confirmPassword?: string;
 }
 
 export class ChangePasswordDto {

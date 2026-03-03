@@ -82,6 +82,12 @@ export class User {
   @Exclude()
   refreshToken: string | null;
 
+  @Column({ type: 'varchar', nullable: true })
+  passwordResetToken: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  passwordResetExpiresAt: Date | null;
+
   @Column({ nullable: true })
   lastLoginAt: Date;
 
