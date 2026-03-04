@@ -522,35 +522,54 @@ export class HousesService {
       id: house.id,
       title: house.title,
       description: house.description,
+      // Pricing – expose both names so mobile can use either
+      rentAmount: Number(house.rentAmount),
       price: Number(house.rentAmount),
+      currency: house.currency,
+      depositMonths: house.depositMonths,
+      // Location – flat fields for mobile UI + nested for map consumers
+      address: house.address || '',
+      area: house.area || '',          // neighbourhood string
+      city: house.city || '',
+      latitude: Number(house.latitude),
+      longitude: Number(house.longitude),
       location: {
         lat: Number(house.latitude),
         lng: Number(house.longitude),
         neighborhood: house.area || '',
         city: house.city || '',
       },
+      // Media
       images: house.photos || [],
+      // Size / features
       bedrooms: house.bedrooms,
       bathrooms: house.bathrooms,
-      area: house.squareMeters ? Number(house.squareMeters) : 0,
+      squareMeters: house.squareMeters ? Number(house.squareMeters) : undefined,
+      // Type – expose both names
+      houseType: house.houseType,
       propertyType: house.houseType,
+      furnishingStatus: house.furnishingStatus,
       amenities: house.amenities || [],
+      // Booleans
+      hasWater: house.hasWater,
+      hasElectricity: house.hasElectricity,
+      hasInternet: house.hasInternet,
+      hasGarden: house.hasGarden,
+      hasSecurityGuard: house.hasSecurityGuard,
+      hasCCTV: house.hasCCTV,
+      petFriendly: house.petFriendly,
+      // Flags
       isVerified: house.status === HouseStatus.ACTIVE && !!house.verifiedAt,
       isUnique: house.isUnique || false,
       isOpenToExchange: house.isOpenToExchange || false,
+      // Relations
       ownerId: house.ownerId,
       agentId,
+      // Status
       status: frontendStatus,
       createdAt: house.createdAt
         ? house.createdAt.toISOString()
         : new Date().toISOString(),
-      // Also include some backend-specific fields for completeness
-      currency: house.currency,
-      furnishingStatus: house.furnishingStatus,
-      hasWater: house.hasWater,
-      hasElectricity: house.hasElectricity,
-      hasInternet: house.hasInternet,
-      depositMonths: house.depositMonths,
     };
   }
 }
