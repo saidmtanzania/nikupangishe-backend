@@ -152,7 +152,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       conversationId: saved.conversationId,
       senderId: saved.senderId,
       content: saved.content,
-      timestamp: saved.createdAt ? saved.createdAt.toISOString() : new Date().toISOString(),
+      timestamp: saved.createdAt
+        ? saved.createdAt.toISOString()
+        : new Date().toISOString(),
       sender: {
         id: socket.user.id,
         name: `${socket.user.firstName || ''} ${socket.user.lastName || ''}`.trim(),

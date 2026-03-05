@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Controller,
   Get,
@@ -45,8 +46,10 @@ export class ExchangesController {
     if (user.role === UserRole.OWNER) {
       return this.exchangesService.getExchangesForOwner(user.id);
     }
-    // For tenant, get their tenant profile ID first
-    return { message: 'Use specific endpoint' };
+    if (user.role === UserRole.TENANT) {
+      return this.exchangesService.getExchangesForTenantUser(user.id);
+    }
+    return [];
   }
 
   @Get(':id')

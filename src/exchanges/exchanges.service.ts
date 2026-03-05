@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Injectable,
   NotFoundException,
@@ -207,6 +208,19 @@ export class ExchangesService {
       order: { createdAt: 'DESC' },
     });
     return exchanges.map((e) => this.toFrontendFormat(e));
+  }
+
+  async getExchangesForTenantUser(userId: string) {
+    const tenantProfile = await this.tenantProfileRepository.findOne({
+      where: { userId },
+      select: ['id'],
+    });
+
+    if (!tenantProfile) {
+      return [];
+    }
+
+    return this.getExchangesForTenant(tenantProfile.id);
   }
 
   async getExchangesForOwner(ownerId: string) {

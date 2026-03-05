@@ -1,13 +1,16 @@
+/* eslint-disable @typescript-eslint/no-unsafe-argument */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ChatMessage } from './entities/chat-message.entity';
+import { ChatMessage, MessageType } from './entities/chat-message.entity';
 import { User } from '../users/entities/user.entity';
 import { House } from '../houses/entities/house.entity';
 
@@ -61,6 +64,109 @@ export class ChatService {
         'Failed to retrieve conversation messages',
       );
     }
+  }
+
+  async startConversation(
+    user: User,
+    body: { recipientId: string; houseId?: string; message?: string },
+  ) {
+    if (!body.recipientId) {
+      throw new BadRequestException('recipientId is required');
+    }
+
+    const recipient = await this.userRepository.findOne({
+      where: { id: body.recipientId },
+      select: ['id', 'firstName', 'lastName', 'avatar', 'role'],
+    });
+    if (!recipient) {
+      throw new BadRequestException('Recipient not found');
+    }
+
+    const conversationId = body.houseId
+      ? ChatService.buildConversationId(body.houseId, user.id)
+      : `dm:${[user.id, recipient.id].sort().join(':')}`;
+
+    if (body.message?.trim()) {
+      await this.sendMessage(conversationId, user, {
+        content: body.message,
+        receiverId: recipient.id,
+      });
+    }
+
+    const propertyTitle = body.houseId
+      ? (
+          await this.houseRepository.findOne({
+            where: { id: body.houseId },
+            select: ['id', 'title'],
+          })
+        )?.title || ''
+      : '';
+
+    return {
+      id: conversationId,
+      participants: [
+        {
+          id: user.id,
+          name:
+            `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'User',
+          avatar: user.avatar,
+          role: user.role,
+        },
+        {
+          id: recipient.id,
+          name:
+            `${recipient.firstName || ''} ${recipient.lastName || ''}`.trim() ||
+            'User',
+          avatar: recipient.avatar,
+          role: recipient.role,
+        },
+      ],
+      propertyId: body.houseId || '',
+      propertyTitle,
+      lastMessage: body.message || '',
+      lastMessageTime: new Date().toISOString(),
+      unreadCount: 0,
+    };
+  }
+
+  async sendMessage(
+    conversationId: string,
+    user: User,
+    body: { content: string; receiverId?: string },
+  ) {
+    const content = body.content?.trim();
+    if (!content) {
+      throw new BadRequestException('Message content is required');
+    }
+
+    const receiverId = await this.resolveReceiverId(
+      conversationId,
+      user.id,
+      body.receiverId,
+    );
+
+    const message = this.messageRepository.create({
+      conversationId,
+      senderId: user.id,
+      receiverId,
+      content,
+      type: MessageType.TEXT,
+    });
+
+    const saved = await this.messageRepository.save(message);
+
+    return {
+      id: saved.id,
+      conversationId: saved.conversationId,
+      senderId: saved.senderId,
+      content: saved.content,
+      createdAt: saved.createdAt
+        ? saved.createdAt.toISOString()
+        : new Date().toISOString(),
+      timestamp: saved.createdAt
+        ? saved.createdAt.toISOString()
+        : new Date().toISOString(),
+    };
   }
 
   async getUserConversations(userId: string) {
@@ -213,6 +319,59 @@ export class ChatService {
         'Failed to retrieve unread message count',
       );
     }
+  }
+
+  private async resolveReceiverId(
+    conversationId: string,
+    currentUserId: string,
+    explicitReceiverId?: string,
+  ): Promise<string> {
+    if (explicitReceiverId && explicitReceiverId !== currentUserId) {
+      return explicitReceiverId;
+    }
+
+    const latest = await this.messageRepository.findOne({
+      where: { conversationId },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (latest) {
+      const isParticipant =
+        latest.senderId === currentUserId ||
+        latest.receiverId === currentUserId;
+      if (!isParticipant) {
+        throw new ForbiddenException('You are not part of this conversation');
+      }
+
+      if (latest.senderId === currentUserId && latest.receiverId) {
+        return latest.receiverId;
+      }
+
+      if (latest.senderId !== currentUserId) {
+        return latest.senderId;
+      }
+    }
+
+    const parts = conversationId.split(':');
+    if (parts.length >= 4 && parts[0] === 'house') {
+      const houseId = parts[1];
+      const tenantId = parts[3];
+
+      if (tenantId !== currentUserId) {
+        return tenantId;
+      }
+
+      const house = await this.houseRepository.findOne({
+        where: { id: houseId },
+        select: ['id', 'ownerId'],
+      });
+
+      if (house?.ownerId && house.ownerId !== currentUserId) {
+        return house.ownerId;
+      }
+    }
+
+    throw new BadRequestException('Unable to resolve message receiver');
   }
 
   // Build a standardized conversation ID
