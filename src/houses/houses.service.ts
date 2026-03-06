@@ -513,10 +513,35 @@ export class HousesService {
 
     // Get primary agent ID if available
     let agentId: string | undefined;
+    let primaryAssignment: HouseAgent | undefined;
     if (house.agentAssignments && house.agentAssignments.length > 0) {
-      const primary = house.agentAssignments.find((a) => a.isPrimary);
-      agentId = primary ? primary.agentId : house.agentAssignments[0].agentId;
+      primaryAssignment = house.agentAssignments.find((a) => a.isPrimary);
+      agentId = primaryAssignment
+        ? primaryAssignment.agentId
+        : house.agentAssignments[0].agentId;
+      if (!primaryAssignment) {
+        primaryAssignment = house.agentAssignments[0];
+      }
     }
+
+    const owner = house.owner
+      ? {
+          id: house.owner.id,
+          firstName: house.owner.firstName,
+          lastName: house.owner.lastName,
+          phone: house.owner.phone,
+        }
+      : undefined;
+
+    const agentUser = primaryAssignment?.agent?.user;
+    const agent = agentUser
+      ? {
+          id: agentUser.id,
+          firstName: agentUser.firstName,
+          lastName: agentUser.lastName,
+          phone: agentUser.phone,
+        }
+      : undefined;
 
     return {
       id: house.id,
@@ -565,6 +590,8 @@ export class HousesService {
       // Relations
       ownerId: house.ownerId,
       agentId,
+      owner,
+      agent,
       // Status
       status: frontendStatus,
       createdAt: house.createdAt
