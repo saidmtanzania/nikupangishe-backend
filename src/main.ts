@@ -111,7 +111,7 @@ async function bootstrap() {
     logger.log(`Swagger docs: http://localhost:${port}/docs`);
   }
 
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 
   logger.log(
     ` Nikupangishe API running on: http://localhost:${port}/${apiPrefix}`,

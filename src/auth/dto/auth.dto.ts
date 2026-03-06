@@ -84,12 +84,32 @@ export class VerifyPhoneDto {
   @IsNotEmpty()
   phone: string;
 
-  @ApiProperty({ example: '1234', description: '4-digit verification code' })
+  @ApiPropertyOptional({
+    example: '1234',
+    description: '4-digit verification code (preferred field)',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  @MaxLength(4)
+  code?: string;
+
+  @ApiPropertyOptional({
+    example: '1234',
+    description: 'Legacy OTP field for backward compatibility',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  @MaxLength(4)
+  otp?: string;
+}
+
+export class ResendCodeDto {
+  @ApiProperty({ example: '+255712345678' })
   @IsString()
   @IsNotEmpty()
-  @MinLength(4)
-  @MaxLength(6)
-  otp: string;
+  phone: string;
 }
 
 export class RefreshTokenDto {

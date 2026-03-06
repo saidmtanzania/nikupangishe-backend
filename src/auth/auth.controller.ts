@@ -4,6 +4,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 import {
+  BadRequestException,
   Controller,
   Post,
   Get,
@@ -26,6 +27,7 @@ import {
   RegisterDto,
   LoginDto,
   VerifyPhoneDto,
+  ResendCodeDto,
   RefreshTokenDto,
   ChangePasswordDto,
   ForgotPasswordDto,
@@ -63,12 +65,24 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify phone number with OTP' })
   async verifyPhone(@Body() dto: VerifyPhoneDto) {
-    return this.authService.verifyPhone(dto.phone, dto.otp);
+    const code = dto.code || dto.otp;
+    if (!code) {
+      throw new BadRequestException('Verification code is required');
+    }
+    return this.authService.verifyPhone(dto.phone, code);
+  }
+
+  @Post('resend-code')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resend phone verification code' })
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  async resendCode(@Body() dto: ResendCodeDto) {
+    return this.authService.resendOtp(dto.phone);
   }
 
   @Post('resend-otp/:phone')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Resend phone verification OTP' })
+  @ApiOperation({ summary: 'Resend phone verification OTP (legacy route)' })
   @Throttle({ default: { limit: 3, ttl: 60000 } })
   async resendOtp(@Param('phone') phone: string) {
     return this.authService.resendOtp(phone);

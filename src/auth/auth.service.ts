@@ -113,12 +113,7 @@ export class AuthService {
       await this.tenantProfileRepository.save(tenantProfile);
     }
 
-    // Generate 4-digit OTP for phone verification (matching frontend)
-    const otp = this.generateOtp();
-    console.log(`Generated OTP for ${phone}: ${otp}`);
-    user.phoneOtp = otp;
-    user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-    await this.userRepository.save(user);
+    const otp = await this.issuePhoneOtp(user);
 
     return {
       message: 'Registration successful. Please verify your phone number.',
@@ -140,7 +135,19 @@ export class AuthService {
 
   async login(user: User) {
     if (!user.isPhoneVerified) {
-      throw new UnauthorizedException('Please verify your phone number first');
+      const otp = await this.issuePhoneOtp(user);
+      throw new UnauthorizedException({
+        message:
+          'Phone number not verified. We sent a new verification code to your phone.',
+        errors: {
+          code: 'PHONE_NOT_VERIFIED',
+          requiresPhoneVerification: true,
+          phone: user.phone,
+          ...(this.configService.get('app.nodeEnv') === 'development' && {
+            otp,
+          }),
+        },
+      });
     }
 
     if (
@@ -214,10 +221,7 @@ export class AuthService {
     if (user.isPhoneVerified)
       throw new BadRequestException('Phone already verified');
 
-    const otp = this.generateOtp();
-    user.phoneOtp = otp;
-    user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await this.userRepository.save(user);
+    const otp = await this.issuePhoneOtp(user);
 
     // TODO: Send via SMS
     console.log(`New OTP for ${phone}: ${otp}`);
@@ -406,6 +410,16 @@ export class AuthService {
   private generateOtp(): string {
     // 4-digit OTP to match frontend verification UI
     return Math.floor(1000 + Math.random() * 9000).toString();
+  }
+
+  private async issuePhoneOtp(user: User): Promise<string> {
+    const otp = this.generateOtp();
+    user.phoneOtp = otp;
+    user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await this.userRepository.save(user);
+    // TODO: Send OTP via SMS provider
+    console.log(`OTP for ${user.phone}: ${otp}`);
+    return otp;
   }
 
   private sanitizeUser(user: User) {
