@@ -5,6 +5,7 @@ import {
   Query,
   UseGuards,
   Post,
+  Patch,
   Body,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
@@ -60,6 +61,16 @@ export class ChatController {
     @Body() body: { content: string; receiverId?: string },
   ) {
     return this.chatService.sendMessage(conversationId, user, body);
+  }
+
+  @Patch('conversations/:conversationId/read')
+  @ApiOperation({ summary: 'Mark all messages in a conversation as read' })
+  async markAsRead(
+    @Param('conversationId') conversationId: string,
+    @CurrentUser() user: User,
+  ) {
+    await this.chatService.markConversationAsRead(conversationId, user.id);
+    return { success: true };
   }
 
   @Get('unread-count')

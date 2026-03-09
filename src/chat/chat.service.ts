@@ -305,6 +305,23 @@ export class ChatService {
     }
   }
 
+  async markConversationAsRead(conversationId: string, userId: string) {
+    try {
+      await this.messageRepository.update(
+        { conversationId, receiverId: userId, isRead: false },
+        { isRead: true, readAt: new Date() },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to mark conversation ${conversationId} as read: ${error.message}`,
+        error.stack,
+      );
+      throw new InternalServerErrorException(
+        'Failed to mark messages as read',
+      );
+    }
+  }
+
   async getUnreadCount(userId: string) {
     try {
       return await this.messageRepository.count({
