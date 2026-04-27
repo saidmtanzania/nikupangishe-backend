@@ -714,6 +714,11 @@ export class HousesService {
       agent,
       // Status
       status: frontendStatus,
+      availableFrom: house.availableFrom
+        ? (house.availableFrom instanceof Date
+            ? house.availableFrom.toISOString().split('T')[0]
+            : String(house.availableFrom))
+        : null,
       createdAt: house.createdAt
         ? house.createdAt.toISOString()
         : new Date().toISOString(),
