@@ -1300,9 +1300,7 @@ async function main() {
         tmpl.photos.length > 0
       ) {
         await houseRepo.update(existingHouse.id, { photos: tmpl.photos });
-        console.log(
-          `  📸  Updated photos for: "${tmpl.title}"`,
-        );
+        console.log(`  📸  Updated photos for: "${tmpl.title}"`);
       } else {
         console.log(`  ↩  House already exists: "${tmpl.title}"`);
       }

@@ -219,6 +219,38 @@ export class HousesService {
     return { message: 'House deactivated successfully' };
   }
 
+  /**
+   * Owner self-publishes a house — sets status directly to ACTIVE.
+   * This bypasses admin verification for MVP; verification badge is
+   * controlled separately by the isVerified flag.
+   */
+  async publishHouse(id: string, owner: User) {
+    const house = await this.findOneRaw(id);
+    this.assertOwnership(house, owner);
+
+    if (house.status === HouseStatus.INACTIVE) {
+      throw new BadRequestException('Cannot publish a deactivated listing');
+    }
+
+    house.status = HouseStatus.ACTIVE;
+    const updated = await this.houseRepository.save(house);
+    await this.invalidateHouseCache(id);
+    return this.toFrontendFormat(updated);
+  }
+
+  /**
+   * Owner unpublishes a house — sets status back to DRAFT so it is
+   * hidden from public browsing without permanently deactivating it.
+   */
+  async unpublishHouse(id: string, owner: User) {
+    const house = await this.findOneRaw(id);
+    this.assertOwnership(house, owner);
+    house.status = HouseStatus.DRAFT;
+    const updated = await this.houseRepository.save(house);
+    await this.invalidateHouseCache(id);
+    return this.toFrontendFormat(updated);
+  }
+
   async assignAgent(houseId: string, dto: AssignAgentDto, owner: User) {
     const house = await this.findOneRaw(houseId);
     this.assertOwnership(house, owner);

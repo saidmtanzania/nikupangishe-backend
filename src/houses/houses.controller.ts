@@ -116,6 +116,28 @@ export class HousesController {
     return this.housesService.remove(id, user);
   }
 
+  @Patch(':id/publish')
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Publish (activate) a house listing [OWNER]' })
+  async publishHouse(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.housesService.publishHouse(id, user);
+  }
+
+  @Patch(':id/unpublish')
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Unpublish (draft) a house listing [OWNER]' })
+  async unpublishHouse(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.housesService.unpublishHouse(id, user);
+  }
+
   // Agent assignment
   @Post(':id/agents')
   @Roles(UserRole.OWNER)
