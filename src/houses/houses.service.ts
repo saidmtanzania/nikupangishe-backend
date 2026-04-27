@@ -407,6 +407,26 @@ export class HousesService {
   }
 
   /**
+   * Reorder photos for a house. The first URL in the array becomes the cover photo.
+   * Only URLs already stored on the house are accepted (prevents arbitrary URL injection).
+   */
+  async reorderPhotos(
+    id: string,
+    photos: string[],
+    ownerId: string,
+  ): Promise<void> {
+    const house = await this.houseRepository.findOneBy({ id });
+    if (!house) throw new NotFoundException('House not found');
+    if (house.ownerId !== ownerId)
+      throw new ForbiddenException('You do not own this house');
+    const existing = new Set(house.photos || []);
+    const safePhotos = photos.filter((url) => existing.has(url));
+    house.photos = safePhotos;
+    await this.houseRepository.save(house);
+    await this.invalidateHouseCache(id);
+  }
+
+  /**
    * Get raw house entity by ID (for internal use, not frontend-formatted).
    */
   async findOneRaw(id: string): Promise<House> {

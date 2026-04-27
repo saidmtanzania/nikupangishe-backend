@@ -202,7 +202,12 @@ export class HousesController {
   ) {
     const urls = await Promise.all(
       files.map((f) =>
-        this.s3Service.uploadFile(f.buffer, f.mimetype, 'houses', f.originalname),
+        this.s3Service.uploadFile(
+          f.buffer,
+          f.mimetype,
+          'houses',
+          f.originalname,
+        ),
       ),
     );
     await this.housesService.addPhotos(id, urls);
@@ -235,10 +240,31 @@ export class HousesController {
   ) {
     const urls = await Promise.all(
       files.map((f) =>
-        this.s3Service.uploadFile(f.buffer, f.mimetype, 'houses', f.originalname),
+        this.s3Service.uploadFile(
+          f.buffer,
+          f.mimetype,
+          'houses',
+          f.originalname,
+        ),
       ),
     );
     await this.housesService.addPhotos(id, urls);
     return { message: 'Images uploaded', images: urls, urls };
+  }
+
+  // ─── Reorder photos (cover photo = first in array) ─────────────────────────
+  @Patch(':id/photos/reorder')
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Reorder house photos; first URL becomes cover [OWNER]',
+  })
+  async reorderPhotos(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { photos: string[] },
+    @CurrentUser() user: User,
+  ) {
+    await this.housesService.reorderPhotos(id, body.photos, user.id);
+    return { message: 'Photos reordered' };
   }
 }
