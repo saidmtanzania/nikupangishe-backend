@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Injectable,
   NotFoundException,
@@ -14,7 +15,10 @@ import {
   HouseAgent,
   HouseAgentStatus,
 } from '../houses/entities/house-agent.entity';
+import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { User, UserRole } from '../users/entities/user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/entities/notification.entity';
 
 export class CreateViewingDto {
   houseId: string;
@@ -39,6 +43,9 @@ export class ViewingsService {
     private houseRepository: Repository<House>,
     @InjectRepository(HouseAgent)
     private houseAgentRepository: Repository<HouseAgent>,
+    @InjectRepository(AgentProfile)
+    private agentProfileRepository: Repository<AgentProfile>,
+    private notificationsService: NotificationsService,
   ) {}
 
   async requestViewing(dto: CreateViewingDto, tenant: User) {
@@ -66,16 +73,50 @@ export class ViewingsService {
       status: ViewingStatus.PENDING,
     });
 
-    return this.viewingRepository.save(viewing);
+    const saved = await this.viewingRepository.save(viewing);
+
+    // Notify the assigned agent
+    if (primaryAgent) {
+      const agentProfile = await this.agentProfileRepository.findOne({
+        where: { id: primaryAgent.agentId },
+        relations: ['user'],
+      });
+      if (agentProfile?.userId) {
+        await this.notificationsService.create(
+          agentProfile.userId,
+          NotificationType.VIEWING_REQUEST,
+          'New Viewing Request',
+          `A tenant has requested to view ${house.title} on ${new Date(dto.preferredDate).toLocaleDateString()}.`,
+          { viewingId: saved.id, houseId: dto.houseId },
+        );
+      }
+    }
+
+    // Notify the house owner
+    if (house.ownerId) {
+      await this.notificationsService.create(
+        house.ownerId,
+        NotificationType.VIEWING_REQUEST,
+        'Viewing Requested for Your Property',
+        `A tenant has requested to view ${house.title}.`,
+        { viewingId: saved.id, houseId: dto.houseId },
+      );
+    }
+
+    return saved;
   }
 
-  async getViewingsForAgent(agentId: string) {
+  async getViewingsForAgent(agentProfileId: string) {
     const viewings = await this.viewingRepository.find({
-      where: { assignedAgentId: agentId },
+      where: { assignedAgentId: agentProfileId },
       relations: ['house', 'tenant'],
       order: { preferredDate: 'ASC' },
     });
     return viewings.map((v) => this.toFrontendFormat(v));
+  }
+
+  async getAgentProfileByUserId(userId: string): Promise<AgentProfile | null> {
+    return this.agentProfileRepository.findOne({ where: { userId } });
   }
 
   async getViewingsForOwner(ownerId: string) {
@@ -122,6 +163,29 @@ export class ViewingsService {
     }
 
     const saved = await this.viewingRepository.save(viewing);
+
+    // Notify tenant when agent confirms the viewing
+    if (dto.status === ViewingStatus.CONFIRMED) {
+      await this.notificationsService.create(
+        viewing.tenantId,
+        NotificationType.VIEWING_CONFIRMED,
+        'Viewing Confirmed',
+        `Your viewing of ${viewing.house?.title ?? 'the property'} has been confirmed.`,
+        { viewingId: viewing.id },
+      );
+    }
+
+    // Notify owner when agent marks tenant as interested after viewing
+    if (dto.tenantInterestedAfterViewing && viewing.house?.ownerId) {
+      await this.notificationsService.create(
+        viewing.house.ownerId,
+        NotificationType.TENANCY_CONFIRMATION_NEEDED,
+        'Tenant Interested — Action Required',
+        `An agent has reported that a tenant is seriously interested in ${viewing.house.title}. Please review and approve or decline.`,
+        { viewingId: viewing.id, houseId: viewing.houseId },
+      );
+    }
+
     return this.toFrontendFormat(saved);
   }
 

@@ -12,10 +12,21 @@ import {
   ExchangeStatus,
   ExchangeType,
 } from './entities/exchange-request.entity';
+import {
+  CommissionRecord,
+  CommissionType,
+} from './entities/commission-record.entity';
 import { Tenancy, TenancyStatus } from '../houses/entities/tenancy.entity';
 import { House, HouseStatus } from '../houses/entities/house.entity';
 import { TenantProfile } from '../tenants/entities/tenant-profile.entity';
+import { AgentProfile } from '../agents/entities/agent-profile.entity';
+import {
+  HouseAgent,
+  HouseAgentStatus,
+} from '../houses/entities/house-agent.entity';
 import { User } from '../users/entities/user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/entities/notification.entity';
 
 export class CreateExchangeDto {
   exchangeType: ExchangeType;
@@ -41,6 +52,13 @@ export class ExchangesService {
     private houseRepository: Repository<House>,
     @InjectRepository(TenantProfile)
     private tenantProfileRepository: Repository<TenantProfile>,
+    @InjectRepository(CommissionRecord)
+    private commissionRepository: Repository<CommissionRecord>,
+    @InjectRepository(AgentProfile)
+    private agentProfileRepository: Repository<AgentProfile>,
+    @InjectRepository(HouseAgent)
+    private houseAgentRepository: Repository<HouseAgent>,
+    private notificationsService: NotificationsService,
   ) {}
 
   async createExchangeRequest(dto: CreateExchangeDto, tenant: User) {
@@ -94,7 +112,27 @@ export class ExchangesService {
       notes: dto.notes,
     });
 
-    return this.exchangeRepository.save(exchange);
+    const saved = await this.exchangeRepository.save(exchange);
+
+    // Notify both house owners that approval is needed
+    const notifyOwner = async (ownerId: string, houseName: string) => {
+      await this.notificationsService.create(
+        ownerId,
+        NotificationType.EXCHANGE_OWNER_APPROVAL_NEEDED,
+        'Exchange Request — Approval Needed',
+        `A tenant has requested to move into or exchange ${houseName}. Please review and approve or decline.`,
+        { exchangeId: saved.id },
+      );
+    };
+
+    if (targetHouse.ownerId) {
+      await notifyOwner(targetHouse.ownerId, targetHouse.title);
+    }
+    if (activeTenancy.house?.ownerId) {
+      await notifyOwner(activeTenancy.house.ownerId, activeTenancy.house.title);
+    }
+
+    return saved;
   }
 
   // Owner approves the exchange from their side
@@ -146,11 +184,34 @@ export class ExchangesService {
 
     exchange.status = ExchangeStatus.REJECTED;
     exchange.rejectionReason = reason;
-    return this.exchangeRepository.save(exchange);
+    const saved = await this.exchangeRepository.save(exchange);
+
+    // Notify initiating tenant
+    const tenantProfile = exchange.initiatorTenant;
+    if (tenantProfile?.userId) {
+      await this.notificationsService.create(
+        tenantProfile.userId,
+        NotificationType.EXCHANGE_REJECTED,
+        'Exchange Request Declined',
+        `Your exchange/move request has been declined. Reason: ${reason}`,
+        { exchangeId },
+      );
+    }
+
+    return saved;
   }
 
   private async completeExchange(exchangeId: string) {
     const exchange = await this.findOne(exchangeId);
+
+    const initiatorTenancy = await this.tenancyRepository.findOne({
+      where: { id: exchange.initiatorTenancyId },
+    });
+    const targetTenancy = exchange.targetTenancyId
+      ? await this.tenancyRepository.findOne({
+          where: { id: exchange.targetTenancyId },
+        })
+      : null;
 
     // End current tenancies
     await this.tenancyRepository.update(exchange.initiatorTenancyId, {
@@ -158,16 +219,130 @@ export class ExchangesService {
       endDate: new Date(),
     });
 
-    if (exchange.targetTenancyId) {
+    if (targetTenancy) {
       await this.tenancyRepository.update(exchange.targetTenancyId, {
         status: TenancyStatus.TRANSFERRED,
         endDate: new Date(),
       });
     }
 
+    // Create new tenancy for initiator in the target house
+    const newInitiatorTenancy = this.tenancyRepository.create({
+      houseId: exchange.targetHouseId,
+      tenantId: exchange.initiatorTenantId,
+      status: TenancyStatus.ACTIVE,
+      startDate: new Date(),
+      agreedRent: initiatorTenancy?.agreedRent,
+    });
+    await this.tenancyRepository.save(newInitiatorTenancy);
+
+    // Update target house to RENTED
+    await this.houseRepository.update(exchange.targetHouseId, {
+      status: HouseStatus.RENTED,
+    });
+
+    // If EXCHANGE type: create new tenancy for target tenant in initiator's old house
+    if (
+      exchange.exchangeType === ExchangeType.EXCHANGE &&
+      targetTenancy &&
+      exchange.targetTenantId &&
+      initiatorTenancy
+    ) {
+      const newTargetTenancy = this.tenancyRepository.create({
+        houseId: initiatorTenancy.houseId,
+        tenantId: exchange.targetTenantId,
+        status: TenancyStatus.ACTIVE,
+        startDate: new Date(),
+        agreedRent: targetTenancy.agreedRent,
+      });
+      await this.tenancyRepository.save(newTargetTenancy);
+
+      await this.houseRepository.update(initiatorTenancy.houseId, {
+        status: HouseStatus.RENTED,
+      });
+    } else if (initiatorTenancy) {
+      // MOVE type: initiator's old house becomes available again
+      await this.houseRepository.update(initiatorTenancy.houseId, {
+        status: HouseStatus.ACTIVE,
+      });
+    }
+
+    // Record commission for the facilitating agent
+    if (exchange.facilitatingAgentId) {
+      const agentProfile = await this.agentProfileRepository.findOne({
+        where: { id: exchange.facilitatingAgentId },
+      });
+
+      if (agentProfile) {
+        const commissionAmount =
+          ((newInitiatorTenancy.agreedRent ?? 0) *
+            (agentProfile.commissionRate ?? 5)) /
+          100;
+
+        const record = this.commissionRepository.create({
+          houseId: exchange.targetHouseId,
+          agentId: exchange.facilitatingAgentId,
+          tenantId: exchange.initiatorTenantId,
+          type: CommissionType.EXCHANGE,
+          amount: commissionAmount,
+          exchangeRequestId: exchange.id,
+        });
+        await this.commissionRepository.save(record);
+
+        // Increment agent stats
+        await this.agentProfileRepository.increment(
+          { id: exchange.facilitatingAgentId },
+          'totalCompletedDeals',
+          1,
+        );
+
+        // Increment house-agent deal count
+        await this.houseAgentRepository
+          .createQueryBuilder()
+          .update()
+          .set({ dealsCompleted: () => 'deals_completed + 1' })
+          .where(
+            'agentId = :agentId AND houseId = :houseId AND status = :status',
+            {
+              agentId: exchange.facilitatingAgentId,
+              houseId: exchange.targetHouseId,
+              status: HouseAgentStatus.ACTIVE,
+            },
+          )
+          .execute();
+      }
+    }
+
     exchange.status = ExchangeStatus.COMPLETED;
     exchange.completedAt = new Date();
-    return this.exchangeRepository.save(exchange);
+    const completed = await this.exchangeRepository.save(exchange);
+
+    // Notify initiating tenant
+    if (exchange.initiatorTenant?.userId) {
+      await this.notificationsService.create(
+        exchange.initiatorTenant.userId,
+        NotificationType.EXCHANGE_COMPLETED,
+        'Your Move/Exchange is Complete',
+        `Your request has been fully approved and your new tenancy is now active.`,
+        { exchangeId },
+      );
+    }
+
+    // Notify target tenant (for EXCHANGE type)
+    if (
+      exchange.exchangeType === ExchangeType.EXCHANGE &&
+      exchange.targetTenant?.userId
+    ) {
+      await this.notificationsService.create(
+        exchange.targetTenant.userId,
+        NotificationType.EXCHANGE_COMPLETED,
+        'House Exchange Complete',
+        `The house exchange has been completed. Your new tenancy is now active.`,
+        { exchangeId },
+      );
+    }
+
+    return completed;
   }
 
   async findOne(id: string) {

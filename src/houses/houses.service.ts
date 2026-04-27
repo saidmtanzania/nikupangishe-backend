@@ -27,6 +27,8 @@ import {
   AssignAgentDto,
   VerifyHouseDto,
 } from './dto/house.dto';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/entities/notification.entity';
 
 @Injectable()
 export class HousesService {
@@ -39,6 +41,7 @@ export class HousesService {
     private agentProfileRepository: Repository<AgentProfile>,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(createHouseDto: CreateHouseDto, owner: User) {
@@ -250,7 +253,24 @@ export class HousesService {
       notes: dto.notes,
     });
 
-    return this.houseAgentRepository.save(assignment);
+    const saved = await this.houseAgentRepository.save(assignment);
+
+    // Notify the agent they've been assigned
+    const agentWithUser = await this.agentProfileRepository.findOne({
+      where: { id: dto.agentId },
+      relations: ['user'],
+    });
+    if (agentWithUser?.userId) {
+      await this.notificationsService.create(
+        agentWithUser.userId,
+        NotificationType.AGENT_ASSIGNED,
+        'You Have Been Assigned to a Property',
+        `You have been assigned to manage ${house.title}.`,
+        { houseId },
+      );
+    }
+
+    return saved;
   }
 
   async removeAgent(houseId: string, agentId: string, owner: User) {
@@ -292,6 +312,26 @@ export class HousesService {
 
     const updated = await this.houseRepository.save(house);
     await this.invalidateListingsCache();
+
+    // Notify owner
+    if (dto.approved) {
+      await this.notificationsService.create(
+        house.ownerId,
+        NotificationType.HOUSE_APPROVED,
+        'Property Listing Approved',
+        `Your property "${house.title}" has been verified and is now live.`,
+        { houseId: house.id },
+      );
+    } else {
+      await this.notificationsService.create(
+        house.ownerId,
+        NotificationType.HOUSE_REJECTED,
+        'Property Listing Rejected',
+        `Your property "${house.title}" was not approved. Reason: ${dto.rejectionReason}`,
+        { houseId: house.id },
+      );
+    }
+
     return updated;
   }
 

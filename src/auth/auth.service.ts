@@ -184,7 +184,10 @@ export class AuthService {
     const user = await this.userRepository.findOne({ where: { phone } });
 
     if (!user) throw new NotFoundException('User not found');
-    if (user.phoneOtp !== otp) throw new BadRequestException('Invalid OTP');
+    if (!user.phoneOtp)
+      throw new BadRequestException('No OTP was issued for this account');
+    const isOtpValid = await bcrypt.compare(otp, user.phoneOtp);
+    if (!isOtpValid) throw new BadRequestException('Invalid OTP');
     if (new Date() > (user.phoneOtpExpiresAt as Date))
       throw new BadRequestException('OTP has expired');
 
@@ -414,7 +417,8 @@ export class AuthService {
 
   private async issuePhoneOtp(user: User): Promise<string> {
     const otp = this.generateOtp();
-    user.phoneOtp = otp;
+    // Hash OTP before storing — never persist plaintext secrets
+    user.phoneOtp = await bcrypt.hash(otp, 10);
     user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await this.userRepository.save(user);
     // TODO: Send OTP via SMS provider
