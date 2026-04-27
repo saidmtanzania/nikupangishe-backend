@@ -445,6 +445,45 @@ export class ExchangesService {
     return this.tenancyRepository.save(tenancy);
   }
 
+  async getOwnerTenancies(ownerId: string) {
+    const tenancies = await this.tenancyRepository
+      .createQueryBuilder('t')
+      .leftJoinAndSelect('t.house', 'house')
+      .leftJoinAndSelect('t.tenant', 'tenantProfile')
+      .leftJoinAndSelect('tenantProfile.user', 'user')
+      .where('house.ownerId = :ownerId', { ownerId })
+      .orderBy('t.createdAt', 'DESC')
+      .getMany();
+
+    return tenancies.map((t) => ({
+      id: t.id,
+      houseId: t.houseId,
+      house: t.house
+        ? { id: t.house.id, title: t.house.title, city: t.house.city, area: t.house.area, images: t.house.photos ?? [] }
+        : undefined,
+      tenantId: t.tenantId,
+      tenant: t.tenant?.user
+        ? {
+            id: t.tenant.user.id,
+            firstName: t.tenant.user.firstName,
+            lastName: t.tenant.user.lastName,
+            email: t.tenant.user.email,
+            phone: t.tenant.user.phone,
+            profilePhoto: t.tenant.user.avatar,
+          }
+        : undefined,
+      status: t.status,
+      startDate: t.startDate ? t.startDate.toISOString() : null,
+      endDate: t.endDate ? t.endDate.toISOString() : null,
+      agreedRent: t.agreedRent ? Number(t.agreedRent) : null,
+      currency: t.currency,
+      agentCommissionRate: t.agentCommissionRate ? Number(t.agentCommissionRate) : null,
+      commissionPaid: t.commissionPaid,
+      notes: t.notes,
+      createdAt: t.createdAt.toISOString(),
+    }));
+  }
+
   private async getInitiatorHouseId(
     exchange: ExchangeRequest,
   ): Promise<string> {

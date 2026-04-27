@@ -52,6 +52,13 @@ export class ExchangesController {
     return [];
   }
 
+  @Get('my-tenancies')
+  @Roles(UserRole.OWNER)
+  @ApiOperation({ summary: 'Get all tenancies for houses owned by current user [OWNER]' })
+  async getMyTenancies(@CurrentUser() user: User) {
+    return this.exchangesService.getOwnerTenancies(user.id);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get exchange request details' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
