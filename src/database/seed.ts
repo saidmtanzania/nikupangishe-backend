@@ -10,6 +10,15 @@ import { DataSource } from 'typeorm';
 dotenv.config();
 
 import { User, UserRole, UserStatus } from '../users/entities/user.entity';
+import { AgentProfile } from '../agents/entities/agent-profile.entity';
+import { TenantProfile } from '../tenants/entities/tenant-profile.entity';
+import { House } from '../houses/entities/house.entity';
+import { HouseAgent } from '../houses/entities/house-agent.entity';
+import { Tenancy } from '../houses/entities/tenancy.entity';
+import { ViewingRequest } from '../viewings/entities/viewing-request.entity';
+import { Notification } from '../notifications/entities/notification.entity';
+import { ExchangeRequest } from '../exchanges/entities/exchange-request.entity';
+import { ChatMessage } from '../chat/entities/chat-message.entity';
 
 // ─── DB connection ────────────────────────────────────────────────────────────
 const AppDataSource = new DataSource({
@@ -19,7 +28,18 @@ const AppDataSource = new DataSource({
   username: process.env.DB_USERNAME || 'postgres',
   password: process.env.DB_PASSWORD || 'nikupangishe_pass',
   database: process.env.DB_NAME || 'nikupangishe',
-  entities: [User],
+  entities: [
+    User,
+    AgentProfile,
+    TenantProfile,
+    House,
+    HouseAgent,
+    Tenancy,
+    ViewingRequest,
+    Notification,
+    ExchangeRequest,
+    ChatMessage,
+  ],
   synchronize: false,
   ssl: false,
 });
