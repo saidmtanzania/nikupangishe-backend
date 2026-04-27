@@ -46,3 +46,10 @@ export const throttleConfig = registerAs('throttle', () => ({
   ttl: parseInt(process.env.THROTTLE_TTL ?? '60', 10) || 60,
   limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10) || 100,
 }));
+
+export const awsConfig = registerAs('aws', () => ({
+  region: process.env.AWS_REGION || 'us-east-1',
+  accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+  bucket: process.env.AWS_S3_BUCKET || '',
+}));

@@ -22,10 +22,8 @@ import {
   ApiOperation,
   ApiBearerAuth,
   ApiConsumes,
-  ApiParam,
 } from '@nestjs/swagger';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { memoryStorage } from 'multer';
 import { HousesService } from './houses.service';
 import {
   CreateHouseDto,
@@ -40,12 +38,16 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import { User, UserRole } from '../users/entities/user.entity';
+import { S3Service } from '../s3/s3.service';
 
 @ApiTags('Houses')
 @Controller('houses')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class HousesController {
-  constructor(private readonly housesService: HousesService) {}
+  constructor(
+    private readonly housesService: HousesService,
+    private readonly s3Service: S3Service,
+  ) {}
 
   // PUBLIC: Browse houses without authentication
   @Get()
@@ -152,22 +154,15 @@ export class HousesController {
     return this.housesService.verifyHouse(id, dto, user);
   }
 
-  // Photo upload - accepts both 'photos' and 'images' field names
+  // ─── Photo upload (field: 'photos') ────────────────────────────────────────
   @Post(':id/photos')
   @Roles(UserRole.OWNER)
   @ApiBearerAuth()
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload house photos [OWNER]' })
+  @ApiOperation({ summary: 'Upload house photos to S3 [OWNER]' })
   @UseInterceptors(
     FilesInterceptor('photos', 20, {
-      storage: diskStorage({
-        destination: './uploads/houses',
-        filename: (_req, file, cb) => {
-          const uniqueSuffix =
-            Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `house-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
+      storage: memoryStorage(),
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.match(/\/(jpg|jpeg|png|webp)$/)) {
           cb(new Error('Only image files are allowed'), false);
@@ -175,7 +170,7 @@ export class HousesController {
           cb(null, true);
         }
       },
-      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
     }),
   )
   async uploadPhotos(
@@ -183,12 +178,16 @@ export class HousesController {
     @UploadedFiles() files: Express.Multer.File[],
     @CurrentUser() _user: User,
   ) {
-    const urls = files.map((f) => `/uploads/houses/${f.filename}`);
+    const urls = await Promise.all(
+      files.map((f) =>
+        this.s3Service.uploadFile(f.buffer, f.mimetype, 'houses', f.originalname),
+      ),
+    );
     await this.housesService.addPhotos(id, urls);
     return { message: 'Photos uploaded', images: urls, urls };
   }
 
-  // Alias endpoint for frontend that sends 'images' field name
+  // ─── Photo upload alias (field: 'images') ──────────────────────────────────
   @Post(':id/images')
   @Roles(UserRole.OWNER)
   @ApiBearerAuth()
@@ -196,14 +195,7 @@ export class HousesController {
   @ApiOperation({ summary: 'Upload house images (alias for photos) [OWNER]' })
   @UseInterceptors(
     FilesInterceptor('images', 20, {
-      storage: diskStorage({
-        destination: './uploads/houses',
-        filename: (_req, file, cb) => {
-          const uniqueSuffix =
-            Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `house-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
+      storage: memoryStorage(),
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.match(/\/(jpg|jpeg|png|webp)$/)) {
           cb(new Error('Only image files are allowed'), false);
@@ -211,7 +203,7 @@ export class HousesController {
           cb(null, true);
         }
       },
-      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
     }),
   )
   async uploadImages(
@@ -219,7 +211,11 @@ export class HousesController {
     @UploadedFiles() files: Express.Multer.File[],
     @CurrentUser() _user: User,
   ) {
-    const urls = files.map((f) => `/uploads/houses/${f.filename}`);
+    const urls = await Promise.all(
+      files.map((f) =>
+        this.s3Service.uploadFile(f.buffer, f.mimetype, 'houses', f.originalname),
+      ),
+    );
     await this.housesService.addPhotos(id, urls);
     return { message: 'Images uploaded', images: urls, urls };
   }
