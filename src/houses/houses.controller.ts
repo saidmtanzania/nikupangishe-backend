@@ -107,8 +107,12 @@ export class HousesController {
   @Get(':id')
   @Public()
   @ApiOperation({ summary: 'Get house details by ID (public)' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.housesService.findOne(id, true);
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user?: User,
+  ) {
+    // Authenticated users (owners, admins) can view non-active houses
+    return this.housesService.findOne(id, !user);
   }
 
   @Post()

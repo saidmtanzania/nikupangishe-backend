@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -140,10 +139,14 @@ export class House {
   @Column({ type: 'jsonb', default: [] })
   videos: string[]; // URLs
 
-  // Verification
+  // Verification — owner uploads evidence for admin to review
   @Column({ nullable: true })
-  verificationVideoUrl: string;
+  verificationVideoUrl: string; // video link submitted by owner
 
+  @Column({ nullable: true, type: 'text' })
+  ownerVerificationNote: string; // written note from owner to admin
+
+  // Verification outcome — written by admin after reviewing
   @Column({ nullable: true, type: 'text' })
   verificationNotes: string;
 
@@ -168,6 +171,10 @@ export class House {
 
   @Column({ type: 'jsonb', nullable: true })
   rules: string[]; // No smoking, no parties, etc.
+
+  // Verification badge — set by admin independently of listing status
+  @Column({ default: false })
+  isVerified: boolean;
 
   // Frontend-compatible fields
   @Column({ default: false })

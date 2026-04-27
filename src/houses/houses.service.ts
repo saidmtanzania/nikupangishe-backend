@@ -108,7 +108,7 @@ export class HousesService {
       isOpenToExchange: createHouseDto.isOpenToExchange,
       squareMeters: createHouseDto.squareMeters,
       ownerId: owner.id,
-      status: HouseStatus.PENDING_VERIFICATION,
+      status: HouseStatus.DRAFT,
     });
 
     const saved = await this.houseRepository.save(house);
@@ -214,8 +214,8 @@ export class HousesService {
     const house = await this.findOneRaw(id);
     this.assertOwnership(house, user);
 
-    // If owner updates details, put back to pending verification
-    const needsReverification = !!(
+    // When owner edits location details, clear the verified badge so admin re-reviews
+    const locationChanged = !!(
       updateDto.address ||
       updateDto.latitude ||
       updateDto.longitude
@@ -223,13 +223,16 @@ export class HousesService {
 
     Object.assign(house, updateDto);
 
-    if (needsReverification && house.status === HouseStatus.ACTIVE) {
-      house.status = HouseStatus.PENDING_VERIFICATION;
+    // Strip verified badge if significant details changed — listing stays live
+    if (locationChanged && house.isVerified) {
+      house.isVerified = false;
+      house.verifiedAt = null as any;
+      house.verifiedBy = null as any;
     }
 
     const updated = await this.houseRepository.save(house);
     await this.invalidateHouseCache(id);
-    return updated;
+    return this.toFrontendFormat(updated);
   }
 
   async remove(id: string, user: User) {
@@ -351,46 +354,47 @@ export class HousesService {
 
     const house = await this.findOneRaw(id);
 
-    if (house.status !== HouseStatus.PENDING_VERIFICATION) {
-      throw new BadRequestException('House is not pending verification');
-    }
-
     if (dto.approved) {
-      house.status = HouseStatus.ACTIVE;
+      // Grant verified badge — does NOT change listing status
+      house.isVerified = true;
       house.verifiedAt = new Date();
       house.verifiedBy = admin.id;
       house.verificationNotes = dto.notes ?? '';
+      house.rejectionReason = null as any;
     } else {
       if (!dto.rejectionReason) {
         throw new BadRequestException('Rejection reason is required');
       }
-      house.status = HouseStatus.REJECTED;
+      // Revoke/deny verified badge — listing remains visible to owner
+      house.isVerified = false;
+      house.verifiedAt = null as any;
+      house.verifiedBy = null as any;
       house.rejectionReason = dto.rejectionReason;
     }
 
     const updated = await this.houseRepository.save(house);
-    await this.invalidateListingsCache();
+    await this.invalidateHouseCache(id);
 
     // Notify owner
     if (dto.approved) {
       await this.notificationsService.create(
         house.ownerId,
         NotificationType.HOUSE_APPROVED,
-        'Property Listing Approved',
-        `Your property "${house.title}" has been verified and is now live.`,
+        'Property Listing Verified',
+        `Your property "${house.title}" has been verified and will now show a verified badge.`,
         { houseId: house.id },
       );
     } else {
       await this.notificationsService.create(
         house.ownerId,
         NotificationType.HOUSE_REJECTED,
-        'Property Listing Rejected',
-        `Your property "${house.title}" was not approved. Reason: ${dto.rejectionReason}`,
+        'Property Verification Declined',
+        `Your property "${house.title}" was not verified. Reason: ${dto.rejectionReason}`,
         { houseId: house.id },
       );
     }
 
-    return updated;
+    return this.toFrontendFormat(updated);
   }
 
   async getOwnerHouses(ownerId: string) {
@@ -410,11 +414,15 @@ export class HousesService {
   async getPendingVerification(admin: User) {
     if (admin.role !== UserRole.ADMIN)
       throw new ForbiddenException('Admin access required');
-    return this.houseRepository.find({
-      where: { status: HouseStatus.PENDING_VERIFICATION },
-      relations: ['owner'],
-      order: { createdAt: 'ASC' },
-    });
+    // Return active houses that have not yet received a verified badge
+    const houses = await this.houseRepository
+      .createQueryBuilder('house')
+      .leftJoinAndSelect('house.owner', 'owner')
+      .where('house.status = :active', { active: HouseStatus.ACTIVE })
+      .andWhere('house.isVerified = false')
+      .orderBy('house.createdAt', 'ASC')
+      .getMany();
+    return houses.map((h) => this.toFrontendFormat(h));
   }
 
   async adminFindAll(
@@ -747,16 +755,23 @@ export class HousesService {
       hasCCTV: house.hasCCTV,
       petFriendly: house.petFriendly,
       // Flags
-      isVerified: house.status === HouseStatus.ACTIVE && !!house.verifiedAt,
+      isVerified: !!house.isVerified,
       isUnique: house.isUnique || false,
       isOpenToExchange: house.isOpenToExchange || false,
+      // Owner verification evidence (for admin review)
+      verificationVideoUrl: house.verificationVideoUrl ?? null,
+      ownerVerificationNote: house.ownerVerificationNote ?? null,
+      // Admin outcome notes
+      verificationNotes: house.verificationNotes ?? null,
+      rejectionReason: house.rejectionReason ?? null,
       // Relations
       ownerId: house.ownerId,
       agentId,
       owner,
       agent,
-      // Status
-      status: frontendStatus,
+      // Status — return the raw backend status so admin UI can use exact values.
+      // isVerified already encodes whether the house has passed admin review.
+      status: house.status,
       availableFrom: house.availableFrom
         ? house.availableFrom instanceof Date
           ? house.availableFrom.toISOString().split('T')[0]
