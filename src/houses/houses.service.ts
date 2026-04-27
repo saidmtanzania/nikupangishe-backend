@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Injectable,
   NotFoundException,
@@ -10,7 +13,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, SelectQueryBuilder } from 'typeorm';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
-import { House, HouseStatus } from './entities/house.entity';
+import { House, HouseStatus, HouseType } from './entities/house.entity';
 import { HouseAgent, HouseAgentStatus } from './entities/house-agent.entity';
 import {
   AgentProfile,
@@ -24,6 +27,8 @@ import {
   AssignAgentDto,
   VerifyHouseDto,
 } from './dto/house.dto';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/entities/notification.entity';
 
 @Injectable()
 export class HousesService {
@@ -36,6 +41,7 @@ export class HousesService {
     private agentProfileRepository: Repository<AgentProfile>,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(createHouseDto: CreateHouseDto, owner: User) {
@@ -43,28 +49,71 @@ export class HousesService {
       throw new ForbiddenException('Only property owners can list houses');
     }
 
-    // Check for duplicate listing by proximity (within 20m radius)
-    const nearby = await this.checkForDuplicateByGPS(
-      createHouseDto.latitude,
-      createHouseDto.longitude,
-      owner.id,
-    );
+    // Normalize frontend fields
+    this.normalizeHouseDto(createHouseDto);
 
-    if (nearby) {
-      throw new ConflictException(
-        'A house already exists at this location. Duplicate listings are not allowed.',
+    const latitude = createHouseDto.latitude;
+    const longitude = createHouseDto.longitude;
+
+    if (latitude && longitude) {
+      // Check for duplicate listing by proximity (within 20m radius)
+      const nearby = await this.checkForDuplicateByGPS(
+        latitude,
+        longitude,
+        owner.id,
       );
+
+      if (nearby) {
+        throw new ConflictException(
+          'A house already exists at this location. Duplicate listings are not allowed.',
+        );
+      }
     }
 
     const house = this.houseRepository.create({
-      ...createHouseDto,
+      title: createHouseDto.title,
+      description: createHouseDto.description,
+      houseType: (createHouseDto.houseType ||
+        createHouseDto.propertyType) as HouseType,
+      furnishingStatus: createHouseDto.furnishingStatus,
+      address: createHouseDto.address,
+      area: createHouseDto.area,
+      city: createHouseDto.city,
+      latitude: createHouseDto.latitude,
+      longitude: createHouseDto.longitude,
+      rentAmount: createHouseDto.rentAmount ?? createHouseDto.price,
+      currency: createHouseDto.currency,
+      depositMonths: createHouseDto.depositMonths,
+      bedrooms: createHouseDto.bedrooms,
+      bathrooms: createHouseDto.bathrooms,
+      parkingSpaces: createHouseDto.parkingSpaces,
+      hasWater: createHouseDto.hasWater,
+      hasElectricity: createHouseDto.hasElectricity,
+      hasInternet: createHouseDto.hasInternet,
+      hasGarden: createHouseDto.hasGarden,
+      hasSecurityGuard: createHouseDto.hasSecurityGuard,
+      hasCCTV: createHouseDto.hasCCTV,
+      petFriendly: createHouseDto.petFriendly,
+      // Always start with empty photos — images MUST be uploaded via
+      // POST /:id/photos or POST /:id/images (which upload to S3).
+      // Any images array passed in the JSON body is intentionally ignored
+      // to prevent placeholder / mock URLs from being persisted.
+      photos: [],
+      videos: (createHouseDto as any).videos ?? [],
+      availableFrom: createHouseDto.availableFrom,
+      minimumLeaseDuration: createHouseDto.minimumLeaseDuration,
+      amenities: createHouseDto.amenities,
+      rules: createHouseDto.rules,
+      isUnique: createHouseDto.isUnique,
+      isOpenToExchange: createHouseDto.isOpenToExchange,
+      squareMeters: createHouseDto.squareMeters,
       ownerId: owner.id,
-      status: HouseStatus.PENDING_VERIFICATION,
+      status: HouseStatus.DRAFT,
     });
 
     const saved = await this.houseRepository.save(house);
     await this.invalidateListingsCache();
-    return saved;
+    return this.toFrontendFormat(saved);
   }
 
   async findAll(filters: HouseFilterDto) {
@@ -95,7 +144,7 @@ export class HousesService {
     const [houses, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
     const result = {
-      data: houses,
+      data: houses.map((h) => this.toFrontendFormat(h)),
       meta: {
         total,
         page,
@@ -108,11 +157,11 @@ export class HousesService {
     return result;
   }
 
-  async findOne(id: string, isPublic = false): Promise<House> {
+  async findOne(id: string, isPublic = false): Promise<any> {
     const cacheKey = `house:${id}`;
     if (isPublic) {
       const cached = await this.cacheManager.get<House>(cacheKey);
-      if (cached) return cached;
+      if (cached) return this.toFrontendFormat(cached);
     }
 
     const house = await this.houseRepository.findOne({
@@ -136,15 +185,37 @@ export class HousesService {
       await this.cacheManager.set(cacheKey, house, 300);
     }
 
-    return house;
+    return this.toFrontendFormat(house);
+  }
+
+  /**
+   * Resolve a short ID (first 8 hex chars of UUID) to a full house record.
+   * Used for pretty/short URLs like /properties/2c27478d.
+   */
+  async findByShortId(shortId: string, isPublic = false): Promise<any> {
+    const house = await this.houseRepository
+      .createQueryBuilder('house')
+      .leftJoinAndSelect('house.owner', 'owner')
+      .leftJoinAndSelect('house.agentAssignments', 'agentAssignments')
+      .leftJoinAndSelect('agentAssignments.agent', 'agent')
+      .leftJoinAndSelect('agent.user', 'agentUser')
+      .leftJoinAndSelect('house.tenancies', 'tenancies')
+      .where('CAST(house.id AS text) LIKE :prefix', { prefix: `${shortId}%` })
+      .getOne();
+
+    if (!house) throw new NotFoundException('House not found');
+    if (isPublic && house.status !== HouseStatus.ACTIVE) {
+      throw new NotFoundException('House not found or not available');
+    }
+    return this.toFrontendFormat(house);
   }
 
   async update(id: string, updateDto: UpdateHouseDto, user: User) {
-    const house = await this.findOne(id);
+    const house = await this.findOneRaw(id);
     this.assertOwnership(house, user);
 
-    // If owner updates details, put back to pending verification
-    const needsReverification = !!(
+    // When owner edits location details, clear the verified badge so admin re-reviews
+    const locationChanged = !!(
       updateDto.address ||
       updateDto.latitude ||
       updateDto.longitude
@@ -152,17 +223,20 @@ export class HousesService {
 
     Object.assign(house, updateDto);
 
-    if (needsReverification && house.status === HouseStatus.ACTIVE) {
-      house.status = HouseStatus.PENDING_VERIFICATION;
+    // Strip verified badge if significant details changed — listing stays live
+    if (locationChanged && house.isVerified) {
+      house.isVerified = false;
+      house.verifiedAt = null as any;
+      house.verifiedBy = null as any;
     }
 
     const updated = await this.houseRepository.save(house);
     await this.invalidateHouseCache(id);
-    return updated;
+    return this.toFrontendFormat(updated);
   }
 
   async remove(id: string, user: User) {
-    const house = await this.findOne(id);
+    const house = await this.findOneRaw(id);
     this.assertOwnership(house, user);
     house.status = HouseStatus.INACTIVE;
     await this.houseRepository.save(house);
@@ -170,8 +244,40 @@ export class HousesService {
     return { message: 'House deactivated successfully' };
   }
 
+  /**
+   * Owner self-publishes a house — sets status directly to ACTIVE.
+   * This bypasses admin verification for MVP; verification badge is
+   * controlled separately by the isVerified flag.
+   */
+  async publishHouse(id: string, owner: User) {
+    const house = await this.findOneRaw(id);
+    this.assertOwnership(house, owner);
+
+    if (house.status === HouseStatus.INACTIVE) {
+      throw new BadRequestException('Cannot publish a deactivated listing');
+    }
+
+    house.status = HouseStatus.ACTIVE;
+    const updated = await this.houseRepository.save(house);
+    await this.invalidateHouseCache(id);
+    return this.toFrontendFormat(updated);
+  }
+
+  /**
+   * Owner unpublishes a house — sets status back to DRAFT so it is
+   * hidden from public browsing without permanently deactivating it.
+   */
+  async unpublishHouse(id: string, owner: User) {
+    const house = await this.findOneRaw(id);
+    this.assertOwnership(house, owner);
+    house.status = HouseStatus.DRAFT;
+    const updated = await this.houseRepository.save(house);
+    await this.invalidateHouseCache(id);
+    return this.toFrontendFormat(updated);
+  }
+
   async assignAgent(houseId: string, dto: AssignAgentDto, owner: User) {
-    const house = await this.findOne(houseId);
+    const house = await this.findOneRaw(houseId);
     this.assertOwnership(house, owner);
 
     const agent = await this.agentProfileRepository.findOne({
@@ -208,11 +314,28 @@ export class HousesService {
       notes: dto.notes,
     });
 
-    return this.houseAgentRepository.save(assignment);
+    const saved = await this.houseAgentRepository.save(assignment);
+
+    // Notify the agent they've been assigned
+    const agentWithUser = await this.agentProfileRepository.findOne({
+      where: { id: dto.agentId },
+      relations: ['user'],
+    });
+    if (agentWithUser?.userId) {
+      await this.notificationsService.create(
+        agentWithUser.userId,
+        NotificationType.AGENT_ASSIGNED,
+        'You Have Been Assigned to a Property',
+        `You have been assigned to manage ${house.title}.`,
+        { houseId },
+      );
+    }
+
+    return saved;
   }
 
   async removeAgent(houseId: string, agentId: string, owner: User) {
-    const house = await this.findOne(houseId);
+    const house = await this.findOneRaw(houseId);
     this.assertOwnership(house, owner);
 
     const assignment = await this.houseAgentRepository.findOne({
@@ -229,50 +352,163 @@ export class HousesService {
     if (admin.role !== UserRole.ADMIN)
       throw new ForbiddenException('Admin access required');
 
-    const house = await this.findOne(id);
-
-    if (house.status !== HouseStatus.PENDING_VERIFICATION) {
-      throw new BadRequestException('House is not pending verification');
-    }
+    const house = await this.findOneRaw(id);
 
     if (dto.approved) {
-      house.status = HouseStatus.ACTIVE;
+      // Grant verified badge — does NOT change listing status
+      house.isVerified = true;
       house.verifiedAt = new Date();
       house.verifiedBy = admin.id;
       house.verificationNotes = dto.notes ?? '';
+      house.rejectionReason = null as any;
     } else {
       if (!dto.rejectionReason) {
         throw new BadRequestException('Rejection reason is required');
       }
-      house.status = HouseStatus.REJECTED;
+      // Revoke/deny verified badge — listing remains visible to owner
+      house.isVerified = false;
+      house.verifiedAt = null as any;
+      house.verifiedBy = null as any;
       house.rejectionReason = dto.rejectionReason;
     }
 
     const updated = await this.houseRepository.save(house);
-    await this.invalidateListingsCache();
-    return updated;
+    await this.invalidateHouseCache(id);
+
+    // Notify owner
+    if (dto.approved) {
+      await this.notificationsService.create(
+        house.ownerId,
+        NotificationType.HOUSE_APPROVED,
+        'Property Listing Verified',
+        `Your property "${house.title}" has been verified and will now show a verified badge.`,
+        { houseId: house.id },
+      );
+    } else {
+      await this.notificationsService.create(
+        house.ownerId,
+        NotificationType.HOUSE_REJECTED,
+        'Property Verification Declined',
+        `Your property "${house.title}" was not verified. Reason: ${dto.rejectionReason}`,
+        { houseId: house.id },
+      );
+    }
+
+    return this.toFrontendFormat(updated);
   }
 
   async getOwnerHouses(ownerId: string) {
-    return this.houseRepository.find({
+    const houses = await this.houseRepository.find({
       where: { ownerId },
       relations: [
+        'owner',
         'agentAssignments',
         'agentAssignments.agent',
         'agentAssignments.agent.user',
       ],
       order: { createdAt: 'DESC' },
     });
+    return houses.map((h) => this.toFrontendFormat(h));
   }
 
   async getPendingVerification(admin: User) {
     if (admin.role !== UserRole.ADMIN)
       throw new ForbiddenException('Admin access required');
-    return this.houseRepository.find({
-      where: { status: HouseStatus.PENDING_VERIFICATION },
-      relations: ['owner'],
-      order: { createdAt: 'ASC' },
+    // Return active houses that have not yet received a verified badge
+    const houses = await this.houseRepository
+      .createQueryBuilder('house')
+      .leftJoinAndSelect('house.owner', 'owner')
+      .where('house.status = :active', { active: HouseStatus.ACTIVE })
+      .andWhere('house.isVerified = false')
+      .orderBy('house.createdAt', 'ASC')
+      .getMany();
+    return houses.map((h) => this.toFrontendFormat(h));
+  }
+
+  async adminFindAll(
+    admin: User,
+    filters: {
+      status?: string;
+      search?: string;
+      houseType?: string;
+      page?: number;
+      limit?: number;
+    },
+  ) {
+    if (admin.role !== UserRole.ADMIN)
+      throw new ForbiddenException('Admin access required');
+
+    const { status, search, houseType, page = 1, limit = 20 } = filters;
+
+    const qb = this.houseRepository
+      .createQueryBuilder('house')
+      .leftJoinAndSelect('house.owner', 'owner')
+      .orderBy('house.createdAt', 'DESC');
+
+    if (status && status !== 'all') {
+      qb.andWhere('house.status = :status', { status });
+    }
+
+    if (search) {
+      qb.andWhere(
+        '(LOWER(house.title) LIKE LOWER(:search) OR LOWER(house.city) LIKE LOWER(:search) OR LOWER(house.address) LIKE LOWER(:search))',
+        { search: `%${search}%` },
+      );
+    }
+
+    if (houseType && houseType !== 'all') {
+      qb.andWhere('house.houseType = :houseType', { houseType });
+    }
+
+    const [houses, total] = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      data: houses.map((h) => this.toFrontendFormat(h)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async addPhotos(id: string, urls: string[]): Promise<void> {
+    const house = await this.houseRepository.findOneBy({ id });
+    if (!house) throw new NotFoundException('House not found');
+    house.photos = [...(house.photos || []), ...urls];
+    await this.houseRepository.save(house);
+    await this.invalidateHouseCache(id);
+  }
+
+  /**
+   * Reorder photos for a house. The first URL in the array becomes the cover photo.
+   * Only URLs already stored on the house are accepted (prevents arbitrary URL injection).
+   */
+  async reorderPhotos(
+    id: string,
+    photos: string[],
+    ownerId: string,
+  ): Promise<void> {
+    const house = await this.houseRepository.findOneBy({ id });
+    if (!house) throw new NotFoundException('House not found');
+    if (house.ownerId !== ownerId)
+      throw new ForbiddenException('You do not own this house');
+    const existing = new Set(house.photos || []);
+    const safePhotos = photos.filter((url) => existing.has(url));
+    house.photos = safePhotos;
+    await this.houseRepository.save(house);
+    await this.invalidateHouseCache(id);
+  }
+
+  /**
+   * Get raw house entity by ID (for internal use, not frontend-formatted).
+   */
+  async findOneRaw(id: string): Promise<House> {
+    const house = await this.houseRepository.findOne({
+      where: { id },
+      relations: ['owner', 'agentAssignments'],
     });
+    if (!house) throw new NotFoundException('House not found');
+    return house;
   }
 
   // Private helpers
@@ -291,20 +527,38 @@ export class HousesService {
         area: `%${filters.area}%`,
       });
     }
-    if (filters.houseType) {
-      qb.andWhere('house.houseType = :type', { type: filters.houseType });
+
+    // Text search (frontend sends 'q' param)
+    if (filters.q) {
+      qb.andWhere(
+        '(LOWER(house.title) LIKE LOWER(:q) OR LOWER(house.area) LIKE LOWER(:q) OR LOWER(house.city) LIKE LOWER(:q))',
+        { q: `%${filters.q}%` },
+      );
     }
-    if (filters.minRent !== undefined) {
-      qb.andWhere('house.rentAmount >= :minRent', { minRent: filters.minRent });
+
+    // Support both houseType and type (frontend sends comma-separated types)
+    const typeFilter = filters.houseType || filters.type;
+    if (typeFilter) {
+      const types = typeFilter.split(',').map((t) => t.trim());
+      qb.andWhere('house.houseType IN (:...types)', { types });
     }
-    if (filters.maxRent !== undefined) {
-      qb.andWhere('house.rentAmount <= :maxRent', { maxRent: filters.maxRent });
+
+    // Support both minRent/maxRent and minPrice/maxPrice (frontend aliases)
+    const minRent = filters.minRent ?? filters.minPrice;
+    const maxRent = filters.maxRent ?? filters.maxPrice;
+    if (minRent !== undefined) {
+      qb.andWhere('house.rentAmount >= :minRent', { minRent });
+    }
+    if (maxRent !== undefined) {
+      qb.andWhere('house.rentAmount <= :maxRent', { maxRent });
     }
     if (filters.bedrooms !== undefined) {
-      qb.andWhere('house.bedrooms = :bedrooms', { bedrooms: filters.bedrooms });
+      qb.andWhere('house.bedrooms >= :bedrooms', {
+        bedrooms: filters.bedrooms,
+      });
     }
     if (filters.bathrooms !== undefined) {
-      qb.andWhere('house.bathrooms = :bathrooms', {
+      qb.andWhere('house.bathrooms >= :bathrooms', {
         bathrooms: filters.bathrooms,
       });
     }
@@ -315,6 +569,16 @@ export class HousesService {
       qb.andWhere('house.hasElectricity = :hasElectricity', {
         hasElectricity: filters.hasElectricity,
       });
+    }
+
+    // Frontend verified filter
+    if (filters.verified === 'true') {
+      // Already filtered by ACTIVE status which means verified
+    }
+
+    // Frontend swap-only filter
+    if (filters.swapOnly === 'true') {
+      qb.andWhere('house.isOpenToExchange = true');
     }
 
     // GPS proximity search using Haversine formula in PostgreSQL
@@ -356,5 +620,166 @@ export class HousesService {
     // For now, delete common cache keys
     const keys = ['houses:list:{}'];
     await Promise.all(keys.map((k) => this.cacheManager.del(k)));
+  }
+
+  /**
+   * Normalize incoming DTO from frontend field names to backend columns.
+   * Frontend sends: price, images, propertyType, location object, area (sqm)
+   * Backend expects: rentAmount, photos, houseType, lat/lng/area/city, squareMeters
+   */
+  private normalizeHouseDto(dto: any): void {
+    // price -> rentAmount
+    if (dto.price !== undefined && dto.rentAmount === undefined) {
+      dto.rentAmount = dto.price;
+    }
+    // Strip images/photos entirely from the body — they must come through S3 upload.
+    // This prevents splash/placeholder URLs (Unsplash, picsum, etc.) from being saved.
+    delete dto.images;
+    delete dto.photos;
+    // propertyType -> houseType
+    if (dto.propertyType !== undefined && dto.houseType === undefined) {
+      dto.houseType = dto.propertyType;
+    }
+    // location object -> flat fields
+    if (dto.location && typeof dto.location === 'object') {
+      if (dto.location.lat !== undefined && dto.latitude === undefined) {
+        dto.latitude = dto.location.lat;
+      }
+      if (dto.location.lng !== undefined && dto.longitude === undefined) {
+        dto.longitude = dto.location.lng;
+      }
+      if (dto.location.neighborhood && dto.area === undefined) {
+        dto.area = dto.location.neighborhood;
+      }
+      if (dto.location.city && dto.city === undefined) {
+        dto.city = dto.location.city;
+      }
+      if (dto.location.address && dto.address === undefined) {
+        dto.address = dto.location.address;
+      }
+    }
+    // area (number = sqm) -> squareMeters (if area is a number, not a string neighborhood)
+    if (typeof dto.area === 'number') {
+      dto.squareMeters = dto.area;
+      delete dto.area; // remove so it doesn't conflict with area (neighborhood string)
+    }
+  }
+
+  /**
+   * Transform a House entity to the frontend Property interface shape.
+   */
+  private toFrontendFormat(house: House): any {
+    // Map backend status to frontend status
+    let frontendStatus: 'available' | 'occupied' | 'pending' = 'pending';
+    if (house.status === HouseStatus.ACTIVE) {
+      frontendStatus = 'available';
+    } else if (house.status === HouseStatus.RENTED) {
+      frontendStatus = 'occupied';
+    } else if (
+      house.status === HouseStatus.DRAFT ||
+      house.status === HouseStatus.PENDING_VERIFICATION
+    ) {
+      frontendStatus = 'pending';
+    }
+
+    // Get primary agent ID if available
+    let agentId: string | undefined;
+    let primaryAssignment: HouseAgent | undefined;
+    if (house.agentAssignments && house.agentAssignments.length > 0) {
+      primaryAssignment = house.agentAssignments.find((a) => a.isPrimary);
+      agentId = primaryAssignment
+        ? primaryAssignment.agentId
+        : house.agentAssignments[0].agentId;
+      if (!primaryAssignment) {
+        primaryAssignment = house.agentAssignments[0];
+      }
+    }
+
+    const owner = house.owner
+      ? {
+          id: house.owner.id,
+          firstName: house.owner.firstName,
+          lastName: house.owner.lastName,
+          phone: house.owner.phone,
+        }
+      : undefined;
+
+    const agentUser = primaryAssignment?.agent?.user;
+    const agent = agentUser
+      ? {
+          id: agentUser.id,
+          firstName: agentUser.firstName,
+          lastName: agentUser.lastName,
+          phone: agentUser.phone,
+        }
+      : undefined;
+
+    return {
+      id: house.id,
+      title: house.title,
+      description: house.description,
+      // Pricing – expose both names so mobile can use either
+      rentAmount: Number(house.rentAmount),
+      price: Number(house.rentAmount),
+      currency: house.currency,
+      depositMonths: house.depositMonths,
+      // Location – flat fields for mobile UI + nested for map consumers
+      address: house.address || '',
+      area: house.area || '', // neighbourhood string
+      city: house.city || '',
+      latitude: Number(house.latitude),
+      longitude: Number(house.longitude),
+      location: {
+        lat: Number(house.latitude),
+        lng: Number(house.longitude),
+        neighborhood: house.area || '',
+        city: house.city || '',
+      },
+      // Media
+      images: house.photos || [],
+      // Size / features
+      bedrooms: house.bedrooms,
+      bathrooms: house.bathrooms,
+      squareMeters: house.squareMeters ? Number(house.squareMeters) : undefined,
+      // Type – expose both names
+      houseType: house.houseType,
+      propertyType: house.houseType,
+      furnishingStatus: house.furnishingStatus,
+      amenities: house.amenities || [],
+      // Booleans
+      hasWater: house.hasWater,
+      hasElectricity: house.hasElectricity,
+      hasInternet: house.hasInternet,
+      hasGarden: house.hasGarden,
+      hasSecurityGuard: house.hasSecurityGuard,
+      hasCCTV: house.hasCCTV,
+      petFriendly: house.petFriendly,
+      // Flags
+      isVerified: !!house.isVerified,
+      isUnique: house.isUnique || false,
+      isOpenToExchange: house.isOpenToExchange || false,
+      // Owner verification evidence (for admin review)
+      verificationVideoUrl: house.verificationVideoUrl ?? null,
+      ownerVerificationNote: house.ownerVerificationNote ?? null,
+      // Admin outcome notes
+      verificationNotes: house.verificationNotes ?? null,
+      rejectionReason: house.rejectionReason ?? null,
+      // Relations
+      ownerId: house.ownerId,
+      agentId,
+      owner,
+      agent,
+      // Status — return the raw backend status so admin UI can use exact values.
+      // isVerified already encodes whether the house has passed admin review.
+      status: house.status,
+      availableFrom: house.availableFrom
+        ? house.availableFrom instanceof Date
+          ? house.availableFrom.toISOString().split('T')[0]
+          : String(house.availableFrom)
+        : null,
+      createdAt: house.createdAt
+        ? house.createdAt.toISOString()
+        : new Date().toISOString(),
+    };
   }
 }

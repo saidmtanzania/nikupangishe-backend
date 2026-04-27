@@ -3,47 +3,63 @@ import {
   IsEnum,
   IsNotEmpty,
   IsString,
+  IsOptional,
   MinLength,
   MaxLength,
-  Matches,
 } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { UserRole } from '../../users/entities/user.entity';
 
 export class RegisterDto {
-  @ApiProperty({ example: 'John' })
+  @ApiPropertyOptional({
+    example: 'John',
+    description: 'First name (used if name is not provided)',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(100)
-  firstName: string;
+  firstName?: string;
 
-  @ApiProperty({ example: 'Doe' })
+  @ApiPropertyOptional({
+    example: 'Doe',
+    description: 'Last name (used if name is not provided)',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(100)
-  lastName: string;
+  lastName?: string;
+
+  @ApiPropertyOptional({
+    example: 'John Doe',
+    description: 'Full name (will be split into firstName/lastName)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  name?: string;
 
   @ApiProperty({ example: 'john@example.com' })
   @IsEmail()
   @IsNotEmpty()
   email: string;
 
-  @ApiProperty({ example: '+255712345678' })
+  @ApiProperty({
+    example: '+255712345678',
+    description: 'Accepts +255XXXXXXXXX or 9-digit format',
+  })
   @IsString()
   @IsNotEmpty()
-  @Matches(/^\+255[0-9]{9}$/, {
-    message: 'Phone must be a valid Tanzanian number (+255XXXXXXXXX)',
-  })
   phone: string;
 
-  @ApiProperty({ example: 'Password@123', minLength: 8 })
-  @IsString()
-  @MinLength(8)
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, {
-    message:
-      'Password must contain uppercase, lowercase, number and special character',
+  @ApiPropertyOptional({
+    example: 'Password@123',
+    minLength: 6,
+    description: 'Optional for frontend first-step registration',
   })
-  password: string;
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  password?: string;
 
   @ApiProperty({ enum: UserRole, example: UserRole.TENANT })
   @IsEnum(UserRole)
@@ -68,12 +84,32 @@ export class VerifyPhoneDto {
   @IsNotEmpty()
   phone: string;
 
-  @ApiProperty({ example: '123456' })
+  @ApiPropertyOptional({
+    example: '1234',
+    description: '4-digit verification code (preferred field)',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  @MaxLength(4)
+  code?: string;
+
+  @ApiPropertyOptional({
+    example: '1234',
+    description: 'Legacy OTP field for backward compatibility',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  @MaxLength(4)
+  otp?: string;
+}
+
+export class ResendCodeDto {
+  @ApiProperty({ example: '+255712345678' })
   @IsString()
   @IsNotEmpty()
-  @MinLength(6)
-  @MaxLength(6)
-  otp: string;
+  phone: string;
 }
 
 export class RefreshTokenDto {
@@ -84,10 +120,28 @@ export class RefreshTokenDto {
 }
 
 export class ForgotPasswordDto {
-  @ApiProperty({ example: 'john@example.com' })
+  @ApiPropertyOptional({
+    example: 'john@example.com',
+    description: 'Email address (provide email or phone)',
+  })
+  @IsOptional()
   @IsEmail()
-  @IsNotEmpty()
-  email: string;
+  email?: string;
+
+  @ApiPropertyOptional({
+    example: '+255712345678',
+    description: 'Phone number (provide email or phone)',
+  })
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @ApiPropertyOptional({
+    description: 'Can send email or phone in a single identifier field',
+  })
+  @IsOptional()
+  @IsString()
+  identifier?: string;
 }
 
 export class ResetPasswordDto {
@@ -99,11 +153,12 @@ export class ResetPasswordDto {
   @ApiProperty({ minLength: 8 })
   @IsString()
   @MinLength(8)
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/, {
-    message:
-      'Password must contain uppercase, lowercase, number and special character',
-  })
   newPassword: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  confirmPassword?: string;
 }
 
 export class ChangePasswordDto {

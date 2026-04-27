@@ -24,6 +24,9 @@ export enum UserRole {
   ADMIN = 'admin',
 }
 
+// Frontend-compatible type alias
+export type FrontendUserRole = 'owner' | 'agent' | 'tenant' | 'admin';
+
 export enum UserStatus {
   PENDING = 'pending',
   ACTIVE = 'active',
@@ -61,7 +64,7 @@ export class User {
   status: UserStatus;
 
   @Column({ nullable: true })
-  avatarUrl: string;
+  avatar: string;
 
   @Column({ default: false })
   isPhoneVerified: boolean;
@@ -78,6 +81,12 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   @Exclude()
   refreshToken: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  passwordResetToken: string | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  passwordResetExpiresAt: Date | null;
 
   @Column({ nullable: true })
   lastLoginAt: Date;
@@ -116,5 +125,15 @@ export class User {
 
   get fullName(): string {
     return `${this.firstName} ${this.lastName}`;
+  }
+
+  // Frontend compatibility: single 'name' field
+  get name(): string {
+    return `${this.firstName} ${this.lastName}`;
+  }
+
+  // Frontend compatibility: 'isVerified' maps to isPhoneVerified
+  get isVerified(): boolean {
+    return this.isPhoneVerified;
   }
 }

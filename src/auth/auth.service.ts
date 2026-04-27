@@ -1,3 +1,5 @@
+/* eslint-disable prefer-const */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
@@ -14,8 +16,15 @@ import { ConfigService } from '@nestjs/config';
 import { User, UserStatus, UserRole } from '../users/entities/user.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { TenantProfile } from '../tenants/entities/tenant-profile.entity';
-import { RegisterDto, LoginDto, ChangePasswordDto } from './dto/auth.dto';
+import {
+  RegisterDto,
+  LoginDto,
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
+} from './dto/auth.dto';
 import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class AuthService {
@@ -31,7 +40,36 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto) {
-    const { email, phone, role, password, firstName, lastName } = registerDto;
+    let { email, phone, role, password, firstName, lastName } = registerDto;
+
+    // Frontend sends 'name' as single field — split into firstName/lastName
+    if (!firstName && !lastName && (registerDto as any).name) {
+      const parts = ((registerDto as any).name as string).trim().split(/\s+/);
+      firstName = parts[0] || 'User';
+      lastName = parts.slice(1).join(' ') || '';
+    }
+
+    if (!firstName) {
+      firstName = 'User';
+    }
+    if (!lastName) {
+      lastName = '';
+    }
+
+    // Normalize phone: frontend may send 9 digits without +255 prefix or with spaces
+    phone = phone.replace(/\s+/g, '');
+    if (/^\d{9}$/.test(phone)) {
+      phone = `+255${phone}`;
+    } else if (/^0\d{9}$/.test(phone)) {
+      phone = `+255${phone.slice(1)}`;
+    } else if (/^255\d{9}$/.test(phone)) {
+      phone = `+${phone}`;
+    }
+
+    // Default password if not provided (frontend first-step registration may not include it)
+    if (!password) {
+      password = 'Temp@' + Math.random().toString(36).slice(2, 10);
+    }
 
     // Check duplicate email/phone
     const existingUser = await this.userRepository.findOne({
@@ -75,14 +113,7 @@ export class AuthService {
       await this.tenantProfileRepository.save(tenantProfile);
     }
 
-    // Generate OTP for phone verification (in real app, send via SMS)
-    const otp = this.generateOtp();
-    user.phoneOtp = otp;
-    user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-    await this.userRepository.save(user);
-
-    // TODO: Send OTP via SMS (integrate with Africa's Talking or similar)
-    console.log(`OTP for ${phone}: ${otp}`); // Remove in production
+    const otp = await this.issuePhoneOtp(user);
 
     return {
       message: 'Registration successful. Please verify your phone number.',
@@ -104,7 +135,19 @@ export class AuthService {
 
   async login(user: User) {
     if (!user.isPhoneVerified) {
-      throw new UnauthorizedException('Please verify your phone number first');
+      const otp = await this.issuePhoneOtp(user);
+      throw new UnauthorizedException({
+        message:
+          'Phone number not verified. We sent a new verification code to your phone.',
+        errors: {
+          code: 'PHONE_NOT_VERIFIED',
+          requiresPhoneVerification: true,
+          phone: user.phone,
+          ...(this.configService.get('app.nodeEnv') === 'development' && {
+            otp,
+          }),
+        },
+      });
     }
 
     if (
@@ -128,10 +171,23 @@ export class AuthService {
   }
 
   async verifyPhone(phone: string, otp: string) {
+    // Normalize phone
+    phone = phone.replace(/\s+/g, '');
+    if (/^\d{9}$/.test(phone)) {
+      phone = `+255${phone}`;
+    } else if (/^0\d{9}$/.test(phone)) {
+      phone = `+255${phone.slice(1)}`;
+    } else if (/^255\d{9}$/.test(phone)) {
+      phone = `+${phone}`;
+    }
+
     const user = await this.userRepository.findOne({ where: { phone } });
 
     if (!user) throw new NotFoundException('User not found');
-    if (user.phoneOtp !== otp) throw new BadRequestException('Invalid OTP');
+    if (!user.phoneOtp)
+      throw new BadRequestException('No OTP was issued for this account');
+    const isOtpValid = await bcrypt.compare(otp, user.phoneOtp);
+    if (!isOtpValid) throw new BadRequestException('Invalid OTP');
     if (new Date() > (user.phoneOtpExpiresAt as Date))
       throw new BadRequestException('OTP has expired');
 
@@ -153,15 +209,22 @@ export class AuthService {
   }
 
   async resendOtp(phone: string) {
+    // Normalize phone
+    phone = phone.replace(/\s+/g, '');
+    if (/^\d{9}$/.test(phone)) {
+      phone = `+255${phone}`;
+    } else if (/^0\d{9}$/.test(phone)) {
+      phone = `+255${phone.slice(1)}`;
+    } else if (/^255\d{9}$/.test(phone)) {
+      phone = `+${phone}`;
+    }
+
     const user = await this.userRepository.findOne({ where: { phone } });
     if (!user) throw new NotFoundException('User not found');
     if (user.isPhoneVerified)
       throw new BadRequestException('Phone already verified');
 
-    const otp = this.generateOtp();
-    user.phoneOtp = otp;
-    user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await this.userRepository.save(user);
+    const otp = await this.issuePhoneOtp(user);
 
     // TODO: Send via SMS
     console.log(`New OTP for ${phone}: ${otp}`);
@@ -206,6 +269,120 @@ export class AuthService {
     return { message: 'Password changed successfully' };
   }
 
+  async forgotPassword(dto: ForgotPasswordDto) {
+    // Determine the identifier: email, phone, or generic identifier field
+    let email: string | undefined = dto.email;
+    let phone: string | undefined = dto.phone;
+
+    if (dto.identifier) {
+      // Detect if identifier is email or phone
+      if (dto.identifier.includes('@')) {
+        email = dto.identifier;
+      } else {
+        phone = dto.identifier;
+      }
+    }
+
+    if (!email && !phone) {
+      throw new BadRequestException(
+        'Please provide an email address or phone number',
+      );
+    }
+
+    // Look up user by email or phone
+    let user: User | null = null;
+    if (email) {
+      user = await this.userRepository.findOne({
+        where: { email: email.toLowerCase() },
+      });
+    }
+    if (!user && phone) {
+      // Normalize phone
+      let normalized = phone.replace(/\s/g, '');
+      if (/^\d{9}$/.test(normalized)) {
+        normalized = '+255' + normalized;
+      } else if (/^0\d{9}$/.test(normalized)) {
+        normalized = '+255' + normalized.slice(1);
+      }
+      user = await this.userRepository.findOne({
+        where: { phone: normalized },
+      });
+    }
+
+    // Always return success to prevent user enumeration
+    if (!user) {
+      return {
+        message:
+          'If an account with that email/phone exists, you will receive reset instructions.',
+      };
+    }
+
+    // Generate a reset token (random hex string)
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
+
+    // Store hashed token and expiry (1 hour)
+    user.passwordResetToken = hashedToken;
+    user.passwordResetExpiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    await this.userRepository.save(user);
+
+    // TODO: Send the resetToken via email/SMS in production
+    // For development, include the token in the response
+    const isDev = this.configService.get('NODE_ENV') !== 'production';
+
+    return {
+      message:
+        'If an account with that email/phone exists, you will receive reset instructions.',
+      ...(isDev && {
+        resetToken,
+        resetUrl: `/auth/reset-password?token=${resetToken}`,
+      }),
+    };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    // Hash the incoming token to compare with stored hash
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(dto.token)
+      .digest('hex');
+
+    const user = await this.userRepository.findOne({
+      where: { passwordResetToken: hashedToken },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Invalid or expired reset token');
+    }
+
+    if (
+      !user.passwordResetExpiresAt ||
+      user.passwordResetExpiresAt < new Date()
+    ) {
+      // Clear expired token
+      user.passwordResetToken = null;
+      user.passwordResetExpiresAt = null;
+      await this.userRepository.save(user);
+      throw new BadRequestException('Reset token has expired');
+    }
+
+    // Validate confirmPassword if provided
+    if (dto.confirmPassword && dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
+    // Set new password and clear reset fields
+    user.password = dto.newPassword;
+    user.passwordResetToken = null;
+    user.passwordResetExpiresAt = null;
+    await this.userRepository.save(user);
+
+    return { message: 'Password has been reset successfully' };
+  }
+
   async getProfile(userId: string) {
     const user = await this.userRepository.findOne({
       where: { id: userId },
@@ -234,17 +411,30 @@ export class AuthService {
   }
 
   private generateOtp(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    // 4-digit OTP to match frontend verification UI
+    return Math.floor(1000 + Math.random() * 9000).toString();
+  }
+
+  private async issuePhoneOtp(user: User): Promise<string> {
+    const otp = this.generateOtp();
+    // Hash OTP before storing — never persist plaintext secrets
+    user.phoneOtp = await bcrypt.hash(otp, 10);
+    user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await this.userRepository.save(user);
+    // TODO: Send OTP via SMS provider
+    console.log(`OTP for ${user.phone}: ${otp}`);
+    return otp;
   }
 
   private sanitizeUser(user: User) {
-    const {
-      password,
-      phoneOtp,
-      phoneOtpExpiresAt,
-      refreshToken,
-      ...sanitized
-    } = user;
-    return sanitized;
+    const { password, phoneOtp, phoneOtpExpiresAt, refreshToken, ...rest } =
+      user;
+    return {
+      ...rest,
+      // Frontend-compatible fields
+      name: `${user.firstName} ${user.lastName}`.trim(),
+      avatar: user.avatar || null,
+      isVerified: user.isPhoneVerified,
+    };
   }
 }

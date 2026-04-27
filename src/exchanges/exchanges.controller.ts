@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Controller,
   Get,
@@ -45,14 +46,23 @@ export class ExchangesController {
     if (user.role === UserRole.OWNER) {
       return this.exchangesService.getExchangesForOwner(user.id);
     }
-    // For tenant, get their tenant profile ID first
-    return { message: 'Use specific endpoint' };
+    if (user.role === UserRole.TENANT) {
+      return this.exchangesService.getExchangesForTenantUser(user.id);
+    }
+    return [];
+  }
+
+  @Get('my-tenancies')
+  @Roles(UserRole.OWNER)
+  @ApiOperation({ summary: 'Get all tenancies for houses owned by current user [OWNER]' })
+  async getMyTenancies(@CurrentUser() user: User) {
+    return this.exchangesService.getOwnerTenancies(user.id);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get exchange request details' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.exchangesService.findOne(id);
+    return this.exchangesService.findOneFormatted(id);
   }
 
   @Patch(':id/approve')

@@ -4,6 +4,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 import {
+  BadRequestException,
   Controller,
   Post,
   Get,
@@ -26,8 +27,11 @@ import {
   RegisterDto,
   LoginDto,
   VerifyPhoneDto,
+  ResendCodeDto,
   RefreshTokenDto,
   ChangePasswordDto,
+  ForgotPasswordDto,
+  ResetPasswordDto,
 } from './dto/auth.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -61,12 +65,24 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify phone number with OTP' })
   async verifyPhone(@Body() dto: VerifyPhoneDto) {
-    return this.authService.verifyPhone(dto.phone, dto.otp);
+    const code = dto.code || dto.otp;
+    if (!code) {
+      throw new BadRequestException('Verification code is required');
+    }
+    return this.authService.verifyPhone(dto.phone, code);
+  }
+
+  @Post('resend-code')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Resend phone verification code' })
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  async resendCode(@Body() dto: ResendCodeDto) {
+    return this.authService.resendOtp(dto.phone);
   }
 
   @Post('resend-otp/:phone')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Resend phone verification OTP' })
+  @ApiOperation({ summary: 'Resend phone verification OTP (legacy route)' })
   @Throttle({ default: { limit: 3, ttl: 60000 } })
   async resendOtp(@Param('phone') phone: string) {
     return this.authService.resendOtp(phone);
@@ -110,5 +126,25 @@ export class AuthController {
     @Body() dto: ChangePasswordDto,
   ) {
     return this.authService.changePassword(user.id, dto);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Request password reset (sends token via email/SMS)',
+  })
+  @ApiResponse({ status: 200, description: 'Reset instructions sent' })
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Reset password using token' })
+  @ApiResponse({ status: 200, description: 'Password reset successful' })
+  @ApiResponse({ status: 400, description: 'Invalid or expired token' })
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 }

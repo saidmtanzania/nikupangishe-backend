@@ -1,4 +1,4 @@
-# 🏠 Nikupangishe API
+# Nikupangishe API
 
 > **Tanzanian Long-term Rental Platform** — Owner-led, Agent-powered, Tenant-friendly.
 
@@ -6,7 +6,7 @@ Built with **NestJS**, **PostgreSQL**, **Redis**, and **Socket.IO**.
 
 ---
 
-## 🏗️ Architecture Overview
+## Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -26,7 +26,7 @@ Built with **NestJS**, **PostgreSQL**, **Redis**, and **Socket.IO**.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 - Node.js 18+
@@ -56,9 +56,9 @@ Swagger docs: **http://localhost:3000/docs**
 
 ---
 
-## 📋 API Modules
+## API Modules
 
-### 🔐 Auth (`/api/v1/auth`)
+### Auth (`/api/v1/auth`)
 | Method | Endpoint | Role | Description |
 |--------|----------|------|-------------|
 | POST | `/register` | Public | Register (owner/agent/tenant) |
@@ -85,7 +85,7 @@ Swagger docs: **http://localhost:3000/docs**
 | PATCH | `/:id/verify` | Admin | Verify or reject listing |
 | POST | `/:id/photos` | Owner | Upload photos |
 
-### 📅 Viewings (`/api/v1/viewings`)
+### Viewings (`/api/v1/viewings`)
 | Method | Endpoint | Role | Description |
 |--------|----------|------|-------------|
 | POST | `/` | Tenant | Request a viewing |
@@ -95,7 +95,7 @@ Swagger docs: **http://localhost:3000/docs**
 
 **Viewing statuses:** `pending` → `confirmed` → `completed` / `cancelled` / `no_show`
 
-### 🔄 Exchanges (`/api/v1/exchanges`)
+### Exchanges (`/api/v1/exchanges`)
 | Method | Endpoint | Role | Description |
 |--------|----------|------|-------------|
 | POST | `/` | Tenant | Request move or exchange |
@@ -110,7 +110,7 @@ Swagger docs: **http://localhost:3000/docs**
 Tenant requests → Initiator's Owner approves → Target Owner approves → Auto-completed
 ```
 
-### 💬 Chat (`/api/v1/chat` + WebSocket `/chat`)
+### Chat (`/api/v1/chat` + WebSocket `/chat`)
 
 **REST endpoints:**
 | Method | Endpoint | Description |
@@ -151,7 +151,7 @@ socket.on('user:offline', ({ userId }) => { /* user went offline */ });
 
 **Conversation ID format:** `house:{houseId}:tenant:{tenantId}`
 
-### 🔔 Notifications (`/api/v1/notifications`)
+### Notifications (`/api/v1/notifications`)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/` | Get all notifications |
@@ -172,7 +172,7 @@ socket.on('user:offline', ({ userId }) => { /* user went offline */ });
 
 ---
 
-## 🗃️ Database Schema
+## Database Schema
 
 ```
 users
@@ -192,7 +192,7 @@ notifications (user-specific, real-time via socket.io)
 
 ---
 
-## 🔑 Key Business Rules
+## Key Business Rules
 
 1. **One listing per house** — GPS proximity check (20m radius) prevents duplicates
 2. **Owner-controlled agents** — Agents can only work on houses where owners explicitly assigned them
@@ -218,7 +218,7 @@ JWT_REFRESH_EXPIRES_IN=30d # Refresh token expiry
 
 ---
 
-## 📡 Redis Usage
+## Redis Usage
 
 - **Listing cache** — House search results cached for 5 minutes
 - **Single house cache** — Individual house details cached for 5 minutes
@@ -228,7 +228,7 @@ To enable Redis caching, update `app.module.ts` CacheModule config with `cache-m
 
 ---
 
-## 🚀 Production Deployment
+## Production Deployment
 
 1. Set `NODE_ENV=production`
 2. Use strong, random `JWT_SECRET` and `JWT_REFRESH_SECRET`

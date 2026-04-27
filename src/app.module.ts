@@ -11,7 +11,9 @@ import {
   jwtConfig,
   uploadConfig,
   throttleConfig,
+  awsConfig,
 } from './config';
+import { S3Module } from './s3/s3.module';
 import { DatabaseModule } from './database/database.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -35,6 +37,7 @@ import { NotificationsModule } from './notifications/notifications.module';
         jwtConfig,
         uploadConfig,
         throttleConfig,
+        awsConfig,
       ],
       envFilePath: '.env',
     }),
@@ -73,6 +76,9 @@ import { NotificationsModule } from './notifications/notifications.module';
 
     // Database
     DatabaseModule,
+
+    // S3
+    S3Module,
 
     // Feature modules
     AuthModule,

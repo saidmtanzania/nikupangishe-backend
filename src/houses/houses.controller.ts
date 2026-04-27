@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Controller,
@@ -20,10 +21,8 @@ import {
   ApiOperation,
   ApiBearerAuth,
   ApiConsumes,
-  ApiParam,
 } from '@nestjs/swagger';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
+import { memoryStorage } from 'multer';
 import { HousesService } from './houses.service';
 import {
   CreateHouseDto,
@@ -38,12 +37,16 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Public } from '../common/decorators/public.decorator';
 import { User, UserRole } from '../users/entities/user.entity';
+import { S3Service } from '../s3/s3.service';
 
 @ApiTags('Houses')
 @Controller('houses')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class HousesController {
-  constructor(private readonly housesService: HousesService) {}
+  constructor(
+    private readonly housesService: HousesService,
+    private readonly s3Service: S3Service,
+  ) {}
 
   // PUBLIC: Browse houses without authentication
   @Get()
@@ -63,6 +66,27 @@ export class HousesController {
     return this.housesService.getPendingVerification(user);
   }
 
+  @Get('admin/all')
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List ALL houses regardless of status [ADMIN]' })
+  async adminFindAll(
+    @CurrentUser() user: User,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('houseType') houseType?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.housesService.adminFindAll(user, {
+      status,
+      search,
+      houseType,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 20,
+    });
+  }
+
   @Get('my-houses')
   @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiBearerAuth()
@@ -71,11 +95,24 @@ export class HousesController {
     return this.housesService.getOwnerHouses(user.id);
   }
 
+  @Get('s/:shortId')
+  @Public()
+  @ApiOperation({
+    summary: 'Get house by short ID — first 8 chars of UUID (public)',
+  })
+  async findByShortId(@Param('shortId') shortId: string) {
+    return this.housesService.findByShortId(shortId, true);
+  }
+
   @Get(':id')
   @Public()
   @ApiOperation({ summary: 'Get house details by ID (public)' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.housesService.findOne(id, true);
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user?: User,
+  ) {
+    // Authenticated users (owners, admins) can view non-active houses
+    return this.housesService.findOne(id, !user);
   }
 
   @Post()
@@ -110,6 +147,28 @@ export class HousesController {
     @CurrentUser() user: User,
   ) {
     return this.housesService.remove(id, user);
+  }
+
+  @Patch(':id/publish')
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Publish (activate) a house listing [OWNER]' })
+  async publishHouse(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.housesService.publishHouse(id, user);
+  }
+
+  @Patch(':id/unpublish')
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Unpublish (draft) a house listing [OWNER]' })
+  async unpublishHouse(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.housesService.unpublishHouse(id, user);
   }
 
   // Agent assignment
@@ -150,22 +209,15 @@ export class HousesController {
     return this.housesService.verifyHouse(id, dto, user);
   }
 
-  // Photo upload
+  // ─── Photo upload (field: 'photos') ────────────────────────────────────────
   @Post(':id/photos')
   @Roles(UserRole.OWNER)
   @ApiBearerAuth()
   @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Upload house photos [OWNER]' })
+  @ApiOperation({ summary: 'Upload house photos to S3 [OWNER]' })
   @UseInterceptors(
     FilesInterceptor('photos', 20, {
-      storage: diskStorage({
-        destination: './uploads/houses',
-        filename: (_req, file, cb) => {
-          const uniqueSuffix =
-            Date.now() + '-' + Math.round(Math.random() * 1e9);
-          cb(null, `house-${uniqueSuffix}${extname(file.originalname)}`);
-        },
-      }),
+      storage: memoryStorage(),
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.match(/\/(jpg|jpeg|png|webp)$/)) {
           cb(new Error('Only image files are allowed'), false);
@@ -173,7 +225,7 @@ export class HousesController {
           cb(null, true);
         }
       },
-      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
     }),
   )
   async uploadPhotos(
@@ -181,9 +233,71 @@ export class HousesController {
     @UploadedFiles() files: Express.Multer.File[],
     @CurrentUser() _user: User,
   ) {
-    const urls = files.map((f) => `/uploads/houses/${f.filename}`);
-    const house = await this.housesService.findOne(id);
-    house.photos = [...(house.photos || []), ...urls];
-    return { message: 'Photos uploaded', urls };
+    const urls = await Promise.all(
+      files.map((f) =>
+        this.s3Service.uploadFile(
+          f.buffer,
+          f.mimetype,
+          'houses',
+          f.originalname,
+        ),
+      ),
+    );
+    await this.housesService.addPhotos(id, urls);
+    return { message: 'Photos uploaded', images: urls, urls };
+  }
+
+  // ─── Photo upload alias (field: 'images') ──────────────────────────────────
+  @Post(':id/images')
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload house images (alias for photos) [OWNER]' })
+  @UseInterceptors(
+    FilesInterceptor('images', 20, {
+      storage: memoryStorage(),
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.match(/\/(jpg|jpeg|png|webp)$/)) {
+          cb(new Error('Only image files are allowed'), false);
+        } else {
+          cb(null, true);
+        }
+      },
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+    }),
+  )
+  async uploadImages(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFiles() files: Express.Multer.File[],
+    @CurrentUser() _user: User,
+  ) {
+    const urls = await Promise.all(
+      files.map((f) =>
+        this.s3Service.uploadFile(
+          f.buffer,
+          f.mimetype,
+          'houses',
+          f.originalname,
+        ),
+      ),
+    );
+    await this.housesService.addPhotos(id, urls);
+    return { message: 'Images uploaded', images: urls, urls };
+  }
+
+  // ─── Reorder photos (cover photo = first in array) ─────────────────────────
+  @Patch(':id/photos/reorder')
+  @Roles(UserRole.OWNER)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Reorder house photos; first URL becomes cover [OWNER]',
+  })
+  async reorderPhotos(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { photos: string[] },
+    @CurrentUser() user: User,
+  ) {
+    await this.housesService.reorderPhotos(id, body.photos, user.id);
+    return { message: 'Photos reordered' };
   }
 }

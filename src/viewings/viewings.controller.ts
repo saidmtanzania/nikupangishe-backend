@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
 import {
   Controller,
   Get,
@@ -41,8 +42,11 @@ export class ViewingsController {
   @ApiOperation({ summary: 'Get viewings for current user (role-based)' })
   async getMyViewings(@CurrentUser() user: User) {
     if (user.role === UserRole.AGENT) {
-      // Need agent profile id - simplified
-      return this.viewingsService.getViewingsForTenant(user.id);
+      const agentProfile = await this.viewingsService.getAgentProfileByUserId(
+        user.id,
+      );
+      if (!agentProfile) return [];
+      return this.viewingsService.getViewingsForAgent(agentProfile.id);
     }
     if (user.role === UserRole.OWNER) {
       return this.viewingsService.getViewingsForOwner(user.id);

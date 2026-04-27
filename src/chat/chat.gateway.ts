@@ -146,14 +146,20 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const saved = await this.messageRepository.save(message);
 
-    // Emit to conversation room
+    // Emit to conversation room — use frontend-compatible field names
     this.server.to(`conversation:${data.conversationId}`).emit('message:new', {
-      ...saved,
+      id: saved.id,
+      conversationId: saved.conversationId,
+      senderId: saved.senderId,
+      content: saved.content,
+      timestamp: saved.createdAt
+        ? saved.createdAt.toISOString()
+        : new Date().toISOString(),
       sender: {
         id: socket.user.id,
-        firstName: socket.user.firstName,
-        lastName: socket.user.lastName,
-        avatarUrl: socket.user.avatarUrl,
+        name: `${socket.user.firstName || ''} ${socket.user.lastName || ''}`.trim(),
+        avatar: socket.user.avatar,
+        role: socket.user.role,
       },
     });
 
@@ -162,7 +168,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       await this.createNotification(
         data.receiverId,
         NotificationType.NEW_MESSAGE,
-        `New message from ${socket.user.firstName}`,
+        `New message from ${socket.user.firstName || 'someone'}`,
         data.content.substring(0, 100),
         { conversationId: data.conversationId, senderId: socket.user.id },
       );
@@ -170,7 +176,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // They're online, emit real-time notification
       this.server.to(`user:${data.receiverId}`).emit('notification:new', {
         type: NotificationType.NEW_MESSAGE,
-        title: `Message from ${socket.user.firstName}`,
+        title: `Message from ${socket.user.firstName || 'someone'}`,
         body: data.content.substring(0, 100),
         data: { conversationId: data.conversationId },
       });
