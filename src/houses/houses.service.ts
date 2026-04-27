@@ -94,7 +94,11 @@ export class HousesService {
       hasSecurityGuard: createHouseDto.hasSecurityGuard,
       hasCCTV: createHouseDto.hasCCTV,
       petFriendly: createHouseDto.petFriendly,
-      photos: (createHouseDto as any).photos ?? createHouseDto.images ?? [],
+      // Always start with empty photos — images MUST be uploaded via
+      // POST /:id/photos or POST /:id/images (which upload to S3).
+      // Any images array passed in the JSON body is intentionally ignored
+      // to prevent placeholder / mock URLs from being persisted.
+      photos: [],
       videos: (createHouseDto as any).videos ?? [],
       availableFrom: createHouseDto.availableFrom,
       minimumLeaseDuration: createHouseDto.minimumLeaseDuration,
@@ -336,15 +340,17 @@ export class HousesService {
   }
 
   async getOwnerHouses(ownerId: string) {
-    return this.houseRepository.find({
+    const houses = await this.houseRepository.find({
       where: { ownerId },
       relations: [
+        'owner',
         'agentAssignments',
         'agentAssignments.agent',
         'agentAssignments.agent.user',
       ],
       order: { createdAt: 'DESC' },
     });
+    return houses.map((h) => this.toFrontendFormat(h));
   }
 
   async getPendingVerification(admin: User) {
@@ -501,10 +507,10 @@ export class HousesService {
     if (dto.price !== undefined && dto.rentAmount === undefined) {
       dto.rentAmount = dto.price;
     }
-    // images -> photos
-    if (dto.images !== undefined && dto.photos === undefined) {
-      dto.photos = dto.images;
-    }
+    // Strip images/photos entirely from the body — they must come through S3 upload.
+    // This prevents splash/placeholder URLs (Unsplash, picsum, etc.) from being saved.
+    delete dto.images;
+    delete dto.photos;
     // propertyType -> houseType
     if (dto.propertyType !== undefined && dto.houseType === undefined) {
       dto.houseType = dto.propertyType;
@@ -594,7 +600,7 @@ export class HousesService {
       depositMonths: house.depositMonths,
       // Location – flat fields for mobile UI + nested for map consumers
       address: house.address || '',
-      area: house.area || '',          // neighbourhood string
+      area: house.area || '', // neighbourhood string
       city: house.city || '',
       latitude: Number(house.latitude),
       longitude: Number(house.longitude),
