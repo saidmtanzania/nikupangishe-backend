@@ -188,6 +188,28 @@ export class HousesService {
     return this.toFrontendFormat(house);
   }
 
+  /**
+   * Resolve a short ID (first 8 hex chars of UUID) to a full house record.
+   * Used for pretty/short URLs like /properties/2c27478d.
+   */
+  async findByShortId(shortId: string, isPublic = false): Promise<any> {
+    const house = await this.houseRepository
+      .createQueryBuilder('house')
+      .leftJoinAndSelect('house.owner', 'owner')
+      .leftJoinAndSelect('house.agentAssignments', 'agentAssignments')
+      .leftJoinAndSelect('agentAssignments.agent', 'agent')
+      .leftJoinAndSelect('agent.user', 'agentUser')
+      .leftJoinAndSelect('house.tenancies', 'tenancies')
+      .where("CAST(house.id AS text) LIKE :prefix", { prefix: `${shortId}%` })
+      .getOne();
+
+    if (!house) throw new NotFoundException('House not found');
+    if (isPublic && house.status !== HouseStatus.ACTIVE) {
+      throw new NotFoundException('House not found or not available');
+    }
+    return this.toFrontendFormat(house);
+  }
+
   async update(id: string, updateDto: UpdateHouseDto, user: User) {
     const house = await this.findOneRaw(id);
     this.assertOwnership(house, user);

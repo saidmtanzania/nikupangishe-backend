@@ -75,6 +75,13 @@ export class HousesController {
     return this.housesService.getOwnerHouses(user.id);
   }
 
+  @Get('s/:shortId')
+  @Public()
+  @ApiOperation({ summary: 'Get house by short ID — first 8 chars of UUID (public)' })
+  async findByShortId(@Param('shortId') shortId: string) {
+    return this.housesService.findByShortId(shortId, true);
+  }
+
   @Get(':id')
   @Public()
   @ApiOperation({ summary: 'Get house details by ID (public)' })
