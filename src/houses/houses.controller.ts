@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-unsafe-return */
-/* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import {
   Controller,
@@ -67,6 +66,27 @@ export class HousesController {
     return this.housesService.getPendingVerification(user);
   }
 
+  @Get('admin/all')
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List ALL houses regardless of status [ADMIN]' })
+  async adminFindAll(
+    @CurrentUser() user: User,
+    @Query('status') status?: string,
+    @Query('search') search?: string,
+    @Query('houseType') houseType?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.housesService.adminFindAll(user, {
+      status,
+      search,
+      houseType,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 20,
+    });
+  }
+
   @Get('my-houses')
   @Roles(UserRole.OWNER, UserRole.ADMIN)
   @ApiBearerAuth()
@@ -77,7 +97,9 @@ export class HousesController {
 
   @Get('s/:shortId')
   @Public()
-  @ApiOperation({ summary: 'Get house by short ID — first 8 chars of UUID (public)' })
+  @ApiOperation({
+    summary: 'Get house by short ID — first 8 chars of UUID (public)',
+  })
   async findByShortId(@Param('shortId') shortId: string) {
     return this.housesService.findByShortId(shortId, true);
   }

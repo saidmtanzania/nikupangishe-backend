@@ -28,6 +28,12 @@ export class AdminUpdateUserDto {
   status?: UserStatus;
 }
 
+export class AdminChangeRoleDto {
+  @ApiPropertyOptional({ enum: UserRole })
+  @IsEnum(UserRole)
+  role: UserRole;
+}
+
 export class UserFilterDto {
   @ApiPropertyOptional({ enum: UserRole })
   @IsOptional()

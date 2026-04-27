@@ -5,6 +5,8 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -12,14 +14,18 @@ import { User, UserRole } from './entities/user.entity';
 import {
   UpdateUserDto,
   AdminUpdateUserDto,
+  AdminChangeRoleDto,
   UserFilterDto,
 } from './dto/user.dto';
+import { AuthService } from '../auth/auth.service';
 
 @Injectable()
 export class UsersService {
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
+    @Inject(forwardRef(() => AuthService))
+    private authService: AuthService,
   ) {}
 
   async getMyProfile(userId: string) {
@@ -102,6 +108,40 @@ export class UsersService {
 
     const saved = await this.userRepository.save(user);
     return this.sanitize(saved);
+  }
+
+  async adminChangeRole(
+    admin: User,
+    targetUserId: string,
+    dto: AdminChangeRoleDto,
+  ) {
+    if (admin.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Admin access required');
+    }
+    const user = await this.userRepository.findOne({
+      where: { id: targetUserId },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role === UserRole.ADMIN) {
+      throw new ForbiddenException('Cannot modify another admin account');
+    }
+    user.role = dto.role;
+    const saved = await this.userRepository.save(user);
+    return this.sanitize(saved);
+  }
+
+  async adminSendPasswordReset(admin: User, targetUserId: string) {
+    if (admin.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Admin access required');
+    }
+    const user = await this.userRepository.findOne({
+      where: { id: targetUserId },
+    });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role === UserRole.ADMIN) {
+      throw new ForbiddenException('Cannot reset another admin account');
+    }
+    return this.authService.forgotPassword({ email: user.email });
   }
 
   private sanitize(user: User): Partial<User> {

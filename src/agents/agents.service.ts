@@ -111,6 +111,49 @@ export class AgentsService {
     });
   }
 
+  async adminFindAll(
+    admin: User,
+    filters: { verificationStatus?: string; page?: number; limit?: number },
+  ) {
+    if (admin.role !== UserRole.ADMIN) {
+      throw new ForbiddenException('Admin access required');
+    }
+    const { verificationStatus, page = 1, limit = 20 } = filters;
+
+    const qb = this.agentProfileRepository
+      .createQueryBuilder('agent')
+      .leftJoinAndSelect('agent.user', 'user')
+      .leftJoinAndSelect('agent.houseAssignments', 'assignments')
+      .orderBy('agent.createdAt', 'DESC');
+
+    if (verificationStatus && verificationStatus !== 'all') {
+      qb.andWhere('agent.verificationStatus = :verificationStatus', {
+        verificationStatus,
+      });
+    }
+
+    const [agents, total] = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      data: agents.map((a) => ({
+        ...this.toPublicFormat(a),
+        user: a.user
+          ? {
+              firstName: a.user.firstName,
+              lastName: a.user.lastName,
+              email: a.user.email,
+              phone: a.user.phone,
+              status: a.user.status,
+            }
+          : null,
+      })),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
   async verifyAgent(agentId: string, dto: VerifyAgentDto, admin: User) {
     if (admin.role !== UserRole.ADMIN) {
       throw new ForbiddenException('Admin access required');

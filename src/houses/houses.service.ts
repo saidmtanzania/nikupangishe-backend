@@ -200,7 +200,7 @@ export class HousesService {
       .leftJoinAndSelect('agentAssignments.agent', 'agent')
       .leftJoinAndSelect('agent.user', 'agentUser')
       .leftJoinAndSelect('house.tenancies', 'tenancies')
-      .where("CAST(house.id AS text) LIKE :prefix", { prefix: `${shortId}%` })
+      .where('CAST(house.id AS text) LIKE :prefix', { prefix: `${shortId}%` })
       .getOne();
 
     if (!house) throw new NotFoundException('House not found');
@@ -417,9 +417,52 @@ export class HousesService {
     });
   }
 
-  /**
-   * Add photos/images to a house (used by upload endpoints).
-   */
+  async adminFindAll(
+    admin: User,
+    filters: {
+      status?: string;
+      search?: string;
+      houseType?: string;
+      page?: number;
+      limit?: number;
+    },
+  ) {
+    if (admin.role !== UserRole.ADMIN)
+      throw new ForbiddenException('Admin access required');
+
+    const { status, search, houseType, page = 1, limit = 20 } = filters;
+
+    const qb = this.houseRepository
+      .createQueryBuilder('house')
+      .leftJoinAndSelect('house.owner', 'owner')
+      .orderBy('house.createdAt', 'DESC');
+
+    if (status && status !== 'all') {
+      qb.andWhere('house.status = :status', { status });
+    }
+
+    if (search) {
+      qb.andWhere(
+        '(LOWER(house.title) LIKE LOWER(:search) OR LOWER(house.city) LIKE LOWER(:search) OR LOWER(house.address) LIKE LOWER(:search))',
+        { search: `%${search}%` },
+      );
+    }
+
+    if (houseType && houseType !== 'all') {
+      qb.andWhere('house.houseType = :houseType', { houseType });
+    }
+
+    const [houses, total] = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      data: houses.map((h) => this.toFrontendFormat(h)),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
   async addPhotos(id: string, urls: string[]): Promise<void> {
     const house = await this.houseRepository.findOneBy({ id });
     if (!house) throw new NotFoundException('House not found');
@@ -715,9 +758,9 @@ export class HousesService {
       // Status
       status: frontendStatus,
       availableFrom: house.availableFrom
-        ? (house.availableFrom instanceof Date
-            ? house.availableFrom.toISOString().split('T')[0]
-            : String(house.availableFrom))
+        ? house.availableFrom instanceof Date
+          ? house.availableFrom.toISOString().split('T')[0]
+          : String(house.availableFrom)
         : null,
       createdAt: house.createdAt
         ? house.createdAt.toISOString()

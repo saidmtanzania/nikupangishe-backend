@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
@@ -10,6 +10,7 @@ import { LocalStrategy } from './strategies/local.strategy';
 import { User } from '../users/entities/user.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { TenantProfile } from '../tenants/entities/tenant-profile.entity';
+import { UsersModule } from '../users/users.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { TenantProfile } from '../tenants/entities/tenant-profile.entity';
         signOptions: { expiresIn: configService.get('jwt.expiresIn') },
       }),
     }),
+    forwardRef(() => UsersModule),
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, LocalStrategy],

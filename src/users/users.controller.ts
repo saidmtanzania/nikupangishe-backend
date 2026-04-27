@@ -26,6 +26,7 @@ import { UsersService } from './users.service';
 import {
   UpdateUserDto,
   AdminUpdateUserDto,
+  AdminChangeRoleDto,
   UserFilterDto,
 } from './dto/user.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -113,5 +114,26 @@ export class UsersController {
     @CurrentUser() user: User,
   ) {
     return this.usersService.adminUpdateUserStatus(user, id, dto);
+  }
+
+  @Patch(':id/role')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Change user role [ADMIN]' })
+  async adminChangeRole(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminChangeRoleDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.usersService.adminChangeRole(user, id, dto);
+  }
+
+  @Post(':id/send-password-reset')
+  @Roles(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Trigger a password reset for a user [ADMIN]' })
+  async adminSendPasswordReset(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.usersService.adminSendPasswordReset(user, id);
   }
 }

@@ -45,6 +45,22 @@ export class AgentsController {
   async getPending(@CurrentUser() user: User) {
     return this.agentsService.getPendingVerification(user);
   }
+  @Get('admin/all')
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List ALL agents regardless of status [ADMIN]' })
+  async adminFindAll(
+    @CurrentUser() user: User,
+    @Query('verificationStatus') verificationStatus?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.agentsService.adminFindAll(user, {
+      verificationStatus,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 20,
+    });
+  }
 
   @Get('me')
   @Roles(UserRole.AGENT)
