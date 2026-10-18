@@ -222,22 +222,21 @@ JWT_REFRESH_EXPIRES_IN=30d # Refresh token expiry
 
 - **Listing cache** — House search results cached for 5 minutes
 - **Single house cache** — Individual house details cached for 5 minutes
-- **Socket.IO adapter** — (configure with `@socket.io/redis-adapter` for multi-instance)
-
-To enable Redis caching, update `app.module.ts` CacheModule config with `cache-manager-redis-yet`.
+- **Socket.IO adapter** — add a Redis Socket.IO adapter before running multiple API replicas.
 
 ---
 
 ## Production Deployment
 
-1. Set `NODE_ENV=production`
-2. Use strong, random `JWT_SECRET` and `JWT_REFRESH_SECRET`
-3. Enable SSL for PostgreSQL connection
-4. Configure Redis with authentication
-5. Set up reverse proxy (nginx) with SSL termination
-6. Configure Socket.IO Redis adapter for horizontal scaling
+Production uses `docker-compose.production.yml` with private PostgreSQL/Redis services, TypeORM migrations before API startup, a non-root distroless runtime, and Caddy TLS termination.
+
+1. Set real S3, Africa's Talking, SES, JWT, database, domain, and CORS values in the production environment.
+2. Set `DB_SSL=true` only for managed PostgreSQL endpoints that require TLS; the bundled private PostgreSQL service uses `false`.
+3. Point `WEB_APP_DOMAIN` and `API_DOMAIN` DNS records to the VPS.
+4. Start the stack:
 
 ```bash
-npm run build
-npm run start:prod
+docker compose -f docker-compose.production.yml up -d --build
 ```
+
+The API readiness endpoint is `/api/v1/health/ready`; Caddy serves the web app and API over HTTPS, including Socket.IO upgrades.

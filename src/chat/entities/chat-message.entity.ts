@@ -24,7 +24,15 @@ export class ChatMessage {
 
   @Index()
   @Column()
-  conversationId: string; // Format: "houseId:tenantId" or "viewingId"
+  conversationId: string; // Format: "dm:{userIdA}:{userIdB}" (sorted)
+
+  // Property this message is about, if any
+  @Column({ type: 'uuid', nullable: true })
+  houseId: string | null;
+
+  // Message this one is replying to (same conversation)
+  @Column({ type: 'uuid', nullable: true })
+  replyToId: string | null;
 
   @ManyToOne(() => User)
   @JoinColumn()

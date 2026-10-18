@@ -8,6 +8,9 @@ import { HouseAgent } from '../houses/entities/house-agent.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { User } from '../users/entities/user.entity';
+import { Tenancy } from '../houses/entities/tenancy.entity';
+import { TenantProfile } from '../tenants/entities/tenant-profile.entity';
+import { CommissionRecord } from '../exchanges/entities/commission-record.entity';
 
 @Module({
   imports: [
@@ -17,6 +20,9 @@ import { User } from '../users/entities/user.entity';
       HouseAgent,
       AgentProfile,
       User,
+      Tenancy,
+      TenantProfile,
+      CommissionRecord,
     ]),
     NotificationsModule,
   ],

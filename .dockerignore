@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+dist
+coverage
+uploads
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+*.tsbuildinfo
+*.log

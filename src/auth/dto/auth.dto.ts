@@ -51,15 +51,15 @@ export class RegisterDto {
   @IsNotEmpty()
   phone: string;
 
-  @ApiPropertyOptional({
+  @ApiProperty({
     example: 'Password@123',
     minLength: 6,
-    description: 'Optional for frontend first-step registration',
+    description: 'Password required before phone verification',
   })
-  @IsOptional()
   @IsString()
+  @IsNotEmpty()
   @MinLength(6)
-  password?: string;
+  password: string;
 
   @ApiProperty({ enum: UserRole, example: UserRole.TENANT })
   @IsEnum(UserRole)
@@ -113,10 +113,13 @@ export class ResendCodeDto {
 }
 
 export class RefreshTokenDto {
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      'Bearer refresh token for mobile clients; web uses an HttpOnly cookie',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  refreshToken: string;
+  refreshToken?: string;
 }
 
 export class ForgotPasswordDto {

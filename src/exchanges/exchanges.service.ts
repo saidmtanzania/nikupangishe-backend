@@ -4,9 +4,13 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Inject,
 } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
+import { invalidateHouses } from '../houses/house-cache.util';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import {
   ExchangeRequest,
   ExchangeStatus,
@@ -24,22 +28,13 @@ import {
   HouseAgent,
   HouseAgentStatus,
 } from '../houses/entities/house-agent.entity';
-import { User } from '../users/entities/user.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
+import { User, UserRole } from '../users/entities/user.entity';
+import { recordAgentCommission } from './commission.util';
+import { ConfirmTenancyDto, CreateExchangeDto } from './dto/exchange.dto';
 
-export class CreateExchangeDto {
-  exchangeType: ExchangeType;
-  targetHouseId: string;
-  notes?: string;
-}
-
-export class ConfirmTenancyDto {
-  tenantUserId: string;
-  houseId: string;
-  startDate?: string;
-  agreedRent?: number;
-}
+export { CreateExchangeDto, ConfirmTenancyDto };
 
 @Injectable()
 export class ExchangesService {
@@ -59,6 +54,9 @@ export class ExchangesService {
     @InjectRepository(HouseAgent)
     private houseAgentRepository: Repository<HouseAgent>,
     private notificationsService: NotificationsService,
+    private dataSource: DataSource,
+    @Inject(CACHE_MANAGER)
+    private cacheManager: Cache,
   ) {}
 
   async createExchangeRequest(dto: CreateExchangeDto, tenant: User) {
@@ -81,25 +79,55 @@ export class ExchangesService {
       );
     }
 
+    if (dto.targetHouseId === activeTenancy.houseId) {
+      throw new BadRequestException('You already live in this house');
+    }
+
     const targetHouse = await this.houseRepository.findOne({
-      where: { id: dto.targetHouseId, status: HouseStatus.ACTIVE },
+      where: { id: dto.targetHouseId },
     });
-
-    if (!targetHouse)
+    if (!targetHouse || !targetHouse.isVerified) {
       throw new NotFoundException('Target house not found or not available');
+    }
 
-    // For exchange type, check if target house has a tenant
     let targetTenancy: Tenancy | null = null;
     if (dto.exchangeType === ExchangeType.EXCHANGE) {
+      // A swap targets an occupied house whose tenant is open to exchanging.
+      if (!targetHouse.isOpenToExchange) {
+        throw new BadRequestException('This house is not open to exchanges');
+      }
       targetTenancy = await this.tenancyRepository.findOne({
         where: { houseId: dto.targetHouseId, status: TenancyStatus.ACTIVE },
       });
-
       if (!targetTenancy) {
         throw new BadRequestException(
           'Target house has no active tenant for an exchange. Use MOVE type instead.',
         );
       }
+    } else if (targetHouse.status !== HouseStatus.ACTIVE) {
+      // A move targets a vacant, listed house.
+      throw new BadRequestException(
+        'Target house is not available to move into',
+      );
+    }
+
+    const openStatuses = [
+      ExchangeStatus.PENDING,
+      ExchangeStatus.INITIATOR_OWNER_APPROVED,
+      ExchangeStatus.TARGET_OWNER_APPROVED,
+      ExchangeStatus.BOTH_OWNERS_APPROVED,
+    ];
+    const existingOpen = await this.exchangeRepository.findOne({
+      where: openStatuses.map((status) => ({
+        initiatorTenantId: tenantProfile.id,
+        targetHouseId: dto.targetHouseId,
+        status,
+      })),
+    });
+    if (existingOpen) {
+      throw new BadRequestException(
+        'You already have an open request for this house',
+      );
     }
 
     const exchange = this.exchangeRepository.create({
@@ -128,8 +156,26 @@ export class ExchangesService {
     if (targetHouse.ownerId) {
       await notifyOwner(targetHouse.ownerId, targetHouse.title);
     }
-    if (activeTenancy.house?.ownerId) {
+    if (
+      activeTenancy.house?.ownerId &&
+      activeTenancy.house.ownerId !== targetHouse.ownerId
+    ) {
       await notifyOwner(activeTenancy.house.ownerId, activeTenancy.house.title);
+    }
+
+    if (targetTenancy) {
+      const targetTenant = await this.tenantProfileRepository.findOne({
+        where: { id: targetTenancy.tenantId },
+      });
+      if (targetTenant?.userId) {
+        await this.notificationsService.create(
+          targetTenant.userId,
+          NotificationType.EXCHANGE_REQUEST,
+          'Someone Wants to Exchange Houses With You',
+          `A tenant has proposed exchanging their home for ${targetHouse.title}. Both owners must approve before anything changes.`,
+          { exchangeId: saved.id },
+        );
+      }
     }
 
     return saved;
@@ -137,50 +183,109 @@ export class ExchangesService {
 
   // Owner approves the exchange from their side
   async ownerApprove(exchangeId: string, owner: User) {
-    const exchange = await this.findOne(exchangeId);
+    const result = await this.dataSource.transaction(async (manager) => {
+      const exchangeRepository = manager.getRepository(ExchangeRequest);
+      const houseRepository = manager.getRepository(House);
+      // Lock the row on its own: Postgres rejects FOR UPDATE on outer joins.
+      const exchange = await exchangeRepository.findOne({
+        where: { id: exchangeId },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-    const initiatorHouseId = await this.getInitiatorHouseId(exchange);
+      if (!exchange) throw new NotFoundException('Exchange request not found');
+      exchange.initiatorTenancy = (await manager
+        .getRepository(Tenancy)
+        .findOne({ where: { id: exchange.initiatorTenancyId } })) as Tenancy;
 
-    const initiatorHouse = initiatorHouseId
-      ? await this.houseRepository.findOne({ where: { id: initiatorHouseId } })
-      : null;
+      if (
+        [
+          ExchangeStatus.COMPLETED,
+          ExchangeStatus.REJECTED,
+          ExchangeStatus.CANCELLED,
+        ].includes(exchange.status)
+      ) {
+        return exchange;
+      }
 
-    const targetHouse = await this.houseRepository.findOne({
-      where: { id: exchange.targetHouseId },
+      const initiatorHouse = exchange.initiatorTenancy?.houseId
+        ? await houseRepository.findOne({
+            where: { id: exchange.initiatorTenancy.houseId },
+          })
+        : null;
+      const targetHouse = await houseRepository.findOne({
+        where: { id: exchange.targetHouseId },
+      });
+
+      const isInitiatorOwner = initiatorHouse?.ownerId === owner.id;
+      const isTargetOwner = targetHouse?.ownerId === owner.id;
+
+      if (!isInitiatorOwner && !isTargetOwner) {
+        throw new ForbiddenException(
+          'You are not an owner of a house involved in this exchange',
+        );
+      }
+
+      if (isInitiatorOwner && !exchange.initiatorOwnerApproved) {
+        exchange.initiatorOwnerApproved = true;
+        exchange.initiatorOwnerApprovedAt = new Date();
+      }
+
+      if (isTargetOwner && !exchange.targetOwnerApproved) {
+        exchange.targetOwnerApproved = true;
+        exchange.targetOwnerApprovedAt = new Date();
+      }
+
+      if (exchange.initiatorOwnerApproved && exchange.targetOwnerApproved) {
+        exchange.status = ExchangeStatus.BOTH_OWNERS_APPROVED;
+        await exchangeRepository.save(exchange);
+        return this.completeExchange(exchange.id, manager);
+      }
+
+      exchange.status = exchange.initiatorOwnerApproved
+        ? ExchangeStatus.INITIATOR_OWNER_APPROVED
+        : ExchangeStatus.TARGET_OWNER_APPROVED;
+      return exchangeRepository.save(exchange);
     });
 
-    const isInitiatorOwner = initiatorHouse?.ownerId === owner.id;
-    const isTargetOwner = targetHouse?.ownerId === owner.id;
-
-    if (!isInitiatorOwner && !isTargetOwner) {
-      throw new ForbiddenException(
-        'You are not an owner of a house involved in this exchange',
+    if (result.status === ExchangeStatus.COMPLETED) {
+      const initiatorHouseId = await this.getInitiatorHouseId(result);
+      await invalidateHouses(
+        this.cacheManager,
+        [result.targetHouseId, initiatorHouseId].filter(Boolean),
       );
     }
-
-    if (isInitiatorOwner && !exchange.initiatorOwnerApproved) {
-      exchange.initiatorOwnerApproved = true;
-      exchange.initiatorOwnerApprovedAt = new Date();
-      exchange.status = ExchangeStatus.INITIATOR_OWNER_APPROVED;
-    }
-
-    if (isTargetOwner && !exchange.targetOwnerApproved) {
-      exchange.targetOwnerApproved = true;
-      exchange.targetOwnerApprovedAt = new Date();
-      exchange.status = ExchangeStatus.TARGET_OWNER_APPROVED;
-    }
-
-    if (exchange.initiatorOwnerApproved && exchange.targetOwnerApproved) {
-      exchange.status = ExchangeStatus.BOTH_OWNERS_APPROVED;
-      await this.exchangeRepository.save(exchange);
-      return this.completeExchange(exchange.id);
-    }
-
-    return this.exchangeRepository.save(exchange);
+    return result;
   }
 
   async ownerReject(exchangeId: string, owner: User, reason: string) {
     const exchange = await this.findOne(exchangeId);
+
+    if (
+      [
+        ExchangeStatus.COMPLETED,
+        ExchangeStatus.REJECTED,
+        ExchangeStatus.CANCELLED,
+      ].includes(exchange.status)
+    ) {
+      throw new BadRequestException('This exchange request is already closed');
+    }
+
+    const initiatorHouseId = await this.getInitiatorHouseId(exchange);
+    const initiatorHouse = initiatorHouseId
+      ? await this.houseRepository.findOne({ where: { id: initiatorHouseId } })
+      : null;
+    const targetHouse = await this.houseRepository.findOne({
+      where: { id: exchange.targetHouseId },
+    });
+
+    if (
+      initiatorHouse?.ownerId !== owner.id &&
+      targetHouse?.ownerId !== owner.id
+    ) {
+      throw new ForbiddenException(
+        'You are not an owner of a house involved in this exchange',
+      );
+    }
 
     exchange.status = ExchangeStatus.REJECTED;
     exchange.rejectionReason = reason;
@@ -201,145 +306,192 @@ export class ExchangesService {
     return saved;
   }
 
-  private async completeExchange(exchangeId: string) {
-    const exchange = await this.findOne(exchangeId);
+  private async completeExchange(
+    exchangeId: string,
+    manager: EntityManager = this.dataSource.manager,
+  ) {
+    const exchangeRepository = manager.getRepository(ExchangeRequest);
+    const tenancyRepository = manager.getRepository(Tenancy);
+    const houseRepository = manager.getRepository(House);
+    const tenantProfileRepository = manager.getRepository(TenantProfile);
 
-    const initiatorTenancy = await this.tenancyRepository.findOne({
-      where: { id: exchange.initiatorTenancyId },
+    // Lock the exchange row on its own (FOR UPDATE cannot span outer joins).
+    const exchange = await exchangeRepository.findOne({
+      where: { id: exchangeId },
+      lock: { mode: 'pessimistic_write' },
     });
+
+    if (!exchange) throw new NotFoundException('Exchange request not found');
+    if (exchange.status === ExchangeStatus.COMPLETED) return exchange;
+
+    const initiatorTenancy = await tenancyRepository.findOne({
+      where: { id: exchange.initiatorTenancyId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!initiatorTenancy || initiatorTenancy.status !== TenancyStatus.ACTIVE) {
+      throw new BadRequestException(
+        'The initiating tenancy is no longer active',
+      );
+    }
+
     const targetTenancy = exchange.targetTenancyId
-      ? await this.tenancyRepository.findOne({
+      ? await tenancyRepository.findOne({
           where: { id: exchange.targetTenancyId },
+          lock: { mode: 'pessimistic_write' },
         })
       : null;
+    if (
+      exchange.exchangeType === ExchangeType.EXCHANGE &&
+      (!targetTenancy || targetTenancy.status !== TenancyStatus.ACTIVE)
+    ) {
+      throw new BadRequestException('The other tenancy is no longer active');
+    }
 
-    // End current tenancies
-    await this.tenancyRepository.update(exchange.initiatorTenancyId, {
-      status: TenancyStatus.TRANSFERRED,
-      endDate: new Date(),
+    const initiatorHouse = await houseRepository.findOne({
+      where: { id: initiatorTenancy.houseId },
+      lock: { mode: 'pessimistic_write' },
     });
+    const targetHouse = await houseRepository.findOne({
+      where: { id: exchange.targetHouseId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!initiatorHouse || !targetHouse) {
+      throw new BadRequestException(
+        'A house in this exchange no longer exists',
+      );
+    }
 
+    if (exchange.exchangeType === ExchangeType.MOVE) {
+      const occupied = await tenancyRepository.findOne({
+        where: { houseId: targetHouse.id, status: TenancyStatus.ACTIVE },
+      });
+      if (occupied) {
+        throw new BadRequestException('The target house is no longer vacant');
+      }
+    }
+
+    const now = new Date();
+
+    // End current tenancies first so the one-active-tenancy indexes allow the new ones.
+    await tenancyRepository.update(initiatorTenancy.id, {
+      status: TenancyStatus.TRANSFERRED,
+      endDate: now,
+    });
     if (targetTenancy) {
-      await this.tenancyRepository.update(exchange.targetTenancyId, {
+      await tenancyRepository.update(targetTenancy.id, {
         status: TenancyStatus.TRANSFERRED,
-        endDate: new Date(),
+        endDate: now,
       });
     }
 
-    // Create new tenancy for initiator in the target house
-    const newInitiatorTenancy = this.tenancyRepository.create({
-      houseId: exchange.targetHouseId,
-      tenantId: exchange.initiatorTenantId,
-      status: TenancyStatus.ACTIVE,
-      startDate: new Date(),
-      agreedRent: initiatorTenancy?.agreedRent,
+    // Initiator moves into the target house at that house's rent.
+    const initiatorRent = Number(
+      exchange.exchangeType === ExchangeType.EXCHANGE &&
+        targetTenancy?.agreedRent
+        ? targetTenancy.agreedRent
+        : targetHouse.rentAmount,
+    );
+    const initiatorCommission = await recordAgentCommission(manager, {
+      houseId: targetHouse.id,
+      tenantProfileId: exchange.initiatorTenantId,
+      monthlyRent: initiatorRent,
+      type: CommissionType.EXCHANGE,
+      exchangeRequestId: exchange.id,
+      currency: targetHouse.currency,
     });
-    await this.tenancyRepository.save(newInitiatorTenancy);
-
-    // Update target house to RENTED
-    await this.houseRepository.update(exchange.targetHouseId, {
+    await tenancyRepository.save(
+      tenancyRepository.create({
+        houseId: targetHouse.id,
+        tenantId: exchange.initiatorTenantId,
+        status: TenancyStatus.ACTIVE,
+        startDate: now,
+        agreedRent: initiatorRent,
+        currency: targetHouse.currency,
+        paymentInstructions:
+          exchange.exchangeType === ExchangeType.EXCHANGE
+            ? (targetTenancy?.paymentInstructions ?? null)
+            : null,
+        facilitatingAgentId: initiatorCommission?.agentProfileId,
+        agentCommissionRate: initiatorCommission?.rate,
+        agentCommissionAmount: initiatorCommission?.amount,
+      }),
+    );
+    await houseRepository.update(targetHouse.id, {
       status: HouseStatus.RENTED,
     });
 
-    // If EXCHANGE type: create new tenancy for target tenant in initiator's old house
-    if (
-      exchange.exchangeType === ExchangeType.EXCHANGE &&
-      targetTenancy &&
-      exchange.targetTenantId &&
-      initiatorTenancy
-    ) {
-      const newTargetTenancy = this.tenancyRepository.create({
-        houseId: initiatorTenancy.houseId,
-        tenantId: exchange.targetTenantId,
-        status: TenancyStatus.ACTIVE,
-        startDate: new Date(),
-        agreedRent: targetTenancy.agreedRent,
+    if (exchange.exchangeType === ExchangeType.EXCHANGE && targetTenancy) {
+      // The other tenant moves into the initiator's old house at its rent.
+      const targetRent = Number(
+        initiatorTenancy.agreedRent ?? initiatorHouse.rentAmount,
+      );
+      const targetCommission = await recordAgentCommission(manager, {
+        houseId: initiatorHouse.id,
+        tenantProfileId: targetTenancy.tenantId,
+        monthlyRent: targetRent,
+        type: CommissionType.EXCHANGE,
+        exchangeRequestId: exchange.id,
+        currency: initiatorHouse.currency,
       });
-      await this.tenancyRepository.save(newTargetTenancy);
-
-      await this.houseRepository.update(initiatorTenancy.houseId, {
+      await tenancyRepository.save(
+        tenancyRepository.create({
+          houseId: initiatorHouse.id,
+          tenantId: targetTenancy.tenantId,
+          status: TenancyStatus.ACTIVE,
+          startDate: now,
+          agreedRent: targetRent,
+          currency: initiatorHouse.currency,
+          paymentInstructions: initiatorTenancy.paymentInstructions ?? null,
+          facilitatingAgentId: targetCommission?.agentProfileId,
+          agentCommissionRate: targetCommission?.rate,
+          agentCommissionAmount: targetCommission?.amount,
+        }),
+      );
+      await houseRepository.update(initiatorHouse.id, {
         status: HouseStatus.RENTED,
       });
-    } else if (initiatorTenancy) {
-      // MOVE type: initiator's old house becomes available again
-      await this.houseRepository.update(initiatorTenancy.houseId, {
+    } else {
+      // MOVE: the initiator's old house is vacant and listed again.
+      await houseRepository.update(initiatorHouse.id, {
         status: HouseStatus.ACTIVE,
       });
     }
 
-    // Record commission for the facilitating agent
-    if (exchange.facilitatingAgentId) {
-      const agentProfile = await this.agentProfileRepository.findOne({
-        where: { id: exchange.facilitatingAgentId },
-      });
-
-      if (agentProfile) {
-        const commissionAmount =
-          ((newInitiatorTenancy.agreedRent ?? 0) *
-            (agentProfile.commissionRate ?? 5)) /
-          100;
-
-        const record = this.commissionRepository.create({
-          houseId: exchange.targetHouseId,
-          agentId: exchange.facilitatingAgentId,
-          tenantId: exchange.initiatorTenantId,
-          type: CommissionType.EXCHANGE,
-          amount: commissionAmount,
-          exchangeRequestId: exchange.id,
-        });
-        await this.commissionRepository.save(record);
-
-        // Increment agent stats
-        await this.agentProfileRepository.increment(
-          { id: exchange.facilitatingAgentId },
-          'totalCompletedDeals',
-          1,
-        );
-
-        // Increment house-agent deal count
-        await this.houseAgentRepository
-          .createQueryBuilder()
-          .update()
-          .set({ dealsCompleted: () => 'deals_completed + 1' })
-          .where(
-            'agentId = :agentId AND houseId = :houseId AND status = :status',
-            {
-              agentId: exchange.facilitatingAgentId,
-              houseId: exchange.targetHouseId,
-              status: HouseAgentStatus.ACTIVE,
-            },
-          )
-          .execute();
-      }
-    }
-
     exchange.status = ExchangeStatus.COMPLETED;
-    exchange.completedAt = new Date();
-    const completed = await this.exchangeRepository.save(exchange);
+    exchange.completedAt = now;
+    exchange.facilitatingAgentId =
+      initiatorCommission?.agentProfileId ?? exchange.facilitatingAgentId;
+    const completed = await exchangeRepository.save(exchange);
 
-    // Notify initiating tenant
-    if (exchange.initiatorTenant?.userId) {
+    const initiatorTenant = await tenantProfileRepository.findOne({
+      where: { id: exchange.initiatorTenantId },
+    });
+    if (initiatorTenant?.userId) {
       await this.notificationsService.create(
-        exchange.initiatorTenant.userId,
+        initiatorTenant.userId,
         NotificationType.EXCHANGE_COMPLETED,
         'Your Move/Exchange is Complete',
-        `Your request has been fully approved and your new tenancy is now active.`,
+        `Both owners approved. Your tenancy at ${targetHouse.title} is now active.`,
         { exchangeId },
       );
     }
 
-    // Notify target tenant (for EXCHANGE type)
     if (
       exchange.exchangeType === ExchangeType.EXCHANGE &&
-      exchange.targetTenant?.userId
+      exchange.targetTenantId
     ) {
-      await this.notificationsService.create(
-        exchange.targetTenant.userId,
-        NotificationType.EXCHANGE_COMPLETED,
-        'House Exchange Complete',
-        `The house exchange has been completed. Your new tenancy is now active.`,
-        { exchangeId },
-      );
+      const targetTenant = await tenantProfileRepository.findOne({
+        where: { id: exchange.targetTenantId },
+      });
+      if (targetTenant?.userId) {
+        await this.notificationsService.create(
+          targetTenant.userId,
+          NotificationType.EXCHANGE_COMPLETED,
+          'House Exchange Complete',
+          `The exchange is complete. Your tenancy at ${initiatorHouse.title} is now active.`,
+          { exchangeId },
+        );
+      }
     }
 
     return completed;
@@ -365,9 +517,59 @@ export class ExchangesService {
   /**
    * Returns a single exchange in the frontend ExchangeRequest format.
    */
-  async findOneFormatted(id: string): Promise<any> {
+  async findOneFormatted(id: string, user: User): Promise<any> {
     const exchange = await this.findOne(id);
+    await this.assertExchangeAccess(exchange, user);
     return this.toFrontendFormat(exchange);
+  }
+
+  /** Only the tenants, owners and managing agents involved (or an admin) may read an exchange. */
+  private async assertExchangeAccess(
+    exchange: ExchangeRequest,
+    user: User,
+  ): Promise<void> {
+    if (user.role === UserRole.ADMIN) return;
+
+    if (user.role === UserRole.TENANT) {
+      if (
+        exchange.initiatorTenant?.userId === user.id ||
+        exchange.targetTenant?.userId === user.id
+      ) {
+        return;
+      }
+    }
+
+    const houseIds = [exchange.targetHouseId];
+    const initiatorHouseId =
+      exchange.initiatorTenancy?.houseId ??
+      (await this.getInitiatorHouseId(exchange));
+    if (initiatorHouseId) houseIds.push(initiatorHouseId);
+
+    if (user.role === UserRole.OWNER) {
+      const owned = await this.houseRepository.count({
+        where: houseIds.map((id) => ({ id, ownerId: user.id })),
+      });
+      if (owned > 0) return;
+    }
+
+    if (user.role === UserRole.AGENT) {
+      const agentProfile = await this.agentProfileRepository.findOne({
+        where: { userId: user.id },
+        select: ['id'],
+      });
+      if (agentProfile) {
+        const managing = await this.houseAgentRepository.count({
+          where: houseIds.map((houseId) => ({
+            houseId,
+            agentId: agentProfile.id,
+            status: HouseAgentStatus.ACTIVE,
+          })),
+        });
+        if (managing > 0) return;
+      }
+    }
+
+    throw new ForbiddenException('You do not have access to this exchange');
   }
 
   async getExchangesForTenant(tenantProfileId: string) {
@@ -417,32 +619,88 @@ export class ExchangesService {
 
   // Confirm tenancy - owner verifies tenant lives in house
   async confirmTenancy(dto: ConfirmTenancyDto, owner: User) {
-    const house = await this.houseRepository.findOne({
-      where: { id: dto.houseId, ownerId: owner.id },
+    const startDate = dto.startDate ? new Date(dto.startDate) : new Date();
+    if (Number.isNaN(startDate.getTime())) {
+      throw new BadRequestException('Start date is invalid');
+    }
+    if (dto.agreedRent !== undefined && dto.agreedRent < 0) {
+      throw new BadRequestException('Agreed rent cannot be negative');
+    }
+
+    let created = false;
+    const tenancy = await this.dataSource.transaction(async (manager) => {
+      const houseRepository = manager.getRepository(House);
+      const tenantProfileRepository = manager.getRepository(TenantProfile);
+      const tenancyRepository = manager.getRepository(Tenancy);
+
+      const house = await houseRepository.findOne({
+        where: { id: dto.houseId, ownerId: owner.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!house) {
+        throw new ForbiddenException(
+          'House not found or you are not the owner',
+        );
+      }
+
+      const tenantProfile = await tenantProfileRepository.findOne({
+        where: { userId: dto.tenantUserId },
+      });
+
+      if (!tenantProfile) throw new NotFoundException('Tenant not found');
+
+      const activeHouseTenancy = await tenancyRepository.findOne({
+        where: { houseId: dto.houseId, status: TenancyStatus.ACTIVE },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (activeHouseTenancy) {
+        if (activeHouseTenancy.tenantId === tenantProfile.id) {
+          return activeHouseTenancy;
+        }
+        throw new BadRequestException(
+          'This house already has an active tenant',
+        );
+      }
+
+      const activeTenantTenancy = await tenancyRepository.findOne({
+        where: { tenantId: tenantProfile.id, status: TenancyStatus.ACTIVE },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (activeTenantTenancy) {
+        throw new BadRequestException(
+          'This tenant already has an active tenancy',
+        );
+      }
+
+      const tenancy = tenancyRepository.create({
+        houseId: dto.houseId,
+        tenantId: tenantProfile.id,
+        status: TenancyStatus.ACTIVE,
+        startDate,
+        agreedRent: dto.agreedRent ?? Number(house.rentAmount),
+        currency: house.currency,
+        paymentInstructions: dto.paymentInstructions?.trim() || null,
+      });
+
+      house.status = HouseStatus.RENTED;
+      await houseRepository.save(house);
+      created = true;
+      return tenancyRepository.save(tenancy);
     });
 
-    if (!house)
-      throw new ForbiddenException('House not found or you are not the owner');
+    if (created) {
+      await invalidateHouses(this.cacheManager, [tenancy.houseId]);
+      await this.notificationsService.create(
+        dto.tenantUserId,
+        NotificationType.TENANCY_CONFIRMED,
+        'Tenancy Confirmed',
+        'The owner confirmed your tenancy. Your new home is now recorded on Nikupangishe.',
+        { tenancyId: tenancy.id, houseId: tenancy.houseId },
+      );
+    }
 
-    const tenantProfile = await this.tenantProfileRepository.findOne({
-      where: { userId: dto.tenantUserId },
-    });
-
-    if (!tenantProfile) throw new NotFoundException('Tenant not found');
-
-    const tenancy = this.tenancyRepository.create({
-      houseId: dto.houseId,
-      tenantId: tenantProfile.id,
-      status: TenancyStatus.ACTIVE,
-      startDate: dto.startDate ? new Date(dto.startDate) : new Date(),
-      agreedRent: dto.agreedRent,
-    });
-
-    // Mark house as rented
-    house.status = HouseStatus.RENTED;
-    await this.houseRepository.save(house);
-
-    return this.tenancyRepository.save(tenancy);
+    return tenancy;
   }
 
   async getOwnerTenancies(ownerId: string) {
@@ -459,7 +717,13 @@ export class ExchangesService {
       id: t.id,
       houseId: t.houseId,
       house: t.house
-        ? { id: t.house.id, title: t.house.title, city: t.house.city, area: t.house.area, images: t.house.photos ?? [] }
+        ? {
+            id: t.house.id,
+            title: t.house.title,
+            city: t.house.city,
+            area: t.house.area,
+            images: t.house.photos ?? [],
+          }
         : undefined,
       tenantId: t.tenantId,
       tenant: t.tenant?.user
@@ -469,6 +733,7 @@ export class ExchangesService {
             lastName: t.tenant.user.lastName,
             email: t.tenant.user.email,
             phone: t.tenant.user.phone,
+            avatar: t.tenant.user.avatar,
             profilePhoto: t.tenant.user.avatar,
           }
         : undefined,
@@ -477,11 +742,81 @@ export class ExchangesService {
       endDate: t.endDate ? t.endDate.toISOString() : null,
       agreedRent: t.agreedRent ? Number(t.agreedRent) : null,
       currency: t.currency,
-      agentCommissionRate: t.agentCommissionRate ? Number(t.agentCommissionRate) : null,
+      agentCommissionRate: t.agentCommissionRate
+        ? Number(t.agentCommissionRate)
+        : null,
       commissionPaid: t.commissionPaid,
+      paymentInstructions: t.paymentInstructions ?? null,
       notes: t.notes,
       createdAt: t.createdAt.toISOString(),
     }));
+  }
+
+  async getTenantTenancy(userId: string) {
+    const tenantProfile = await this.tenantProfileRepository.findOne({
+      where: { userId },
+      select: ['id'],
+    });
+
+    if (!tenantProfile) return null;
+
+    const tenancy = await this.tenancyRepository.findOne({
+      where: {
+        tenantId: tenantProfile.id,
+        status: TenancyStatus.ACTIVE,
+      },
+      relations: ['house', 'tenant', 'tenant.user'],
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!tenancy) return null;
+
+    return {
+      id: tenancy.id,
+      houseId: tenancy.houseId,
+      house: tenancy.house
+        ? {
+            id: tenancy.house.id,
+            title: tenancy.house.title,
+            city: tenancy.house.city,
+            area: tenancy.house.area,
+            images: tenancy.house.photos ?? [],
+          }
+        : undefined,
+      tenantId: tenancy.tenantId,
+      tenant: tenancy.tenant?.user
+        ? {
+            id: tenancy.tenant.user.id,
+            firstName: tenancy.tenant.user.firstName,
+            lastName: tenancy.tenant.user.lastName,
+            email: tenancy.tenant.user.email,
+            phone: tenancy.tenant.user.phone,
+            avatar: tenancy.tenant.user.avatar,
+          }
+        : undefined,
+      status: tenancy.status,
+      startDate: tenancy.startDate ? tenancy.startDate.toISOString() : null,
+      endDate: tenancy.endDate ? tenancy.endDate.toISOString() : null,
+      agreedRent:
+        tenancy.agreedRent !== null && tenancy.agreedRent !== undefined
+          ? Number(tenancy.agreedRent)
+          : null,
+      currency: tenancy.currency,
+      agentCommissionRate:
+        tenancy.agentCommissionRate !== null &&
+        tenancy.agentCommissionRate !== undefined
+          ? Number(tenancy.agentCommissionRate)
+          : null,
+      agentCommissionAmount:
+        tenancy.agentCommissionAmount !== null &&
+        tenancy.agentCommissionAmount !== undefined
+          ? Number(tenancy.agentCommissionAmount)
+          : undefined,
+      commissionPaid: tenancy.commissionPaid,
+      paymentInstructions: tenancy.paymentInstructions ?? null,
+      notes: tenancy.notes,
+      createdAt: tenancy.createdAt.toISOString(),
+    };
   }
 
   private async getInitiatorHouseId(

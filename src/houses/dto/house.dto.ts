@@ -208,12 +208,16 @@ export class CreateHouseDto {
   location?: { lat: number; lng: number; neighborhood: string; city: string };
 
   // Verification evidence — owner submits these for admin review
-  @ApiPropertyOptional({ description: 'Video URL uploaded by owner for admin verification' })
+  @ApiPropertyOptional({
+    description: 'Video URL uploaded by owner for admin verification',
+  })
   @IsOptional()
   @IsString()
   verificationVideoUrl?: string;
 
-  @ApiPropertyOptional({ description: 'Written note from owner to admin to support verification' })
+  @ApiPropertyOptional({
+    description: 'Written note from owner to admin to support verification',
+  })
   @IsOptional()
   @IsString()
   ownerVerificationNote?: string;

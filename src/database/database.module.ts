@@ -15,12 +15,15 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
         password: configService.get('database.password'),
         database: configService.get('database.name'),
         entities: [__dirname + '/../**/*.entity{.ts,.js}'],
-        synchronize: configService.get('app.nodeEnv') === 'development',
-        logging: configService.get('app.nodeEnv') === 'developmentx',
-        ssl:
-          configService.get('app.nodeEnv') === 'production'
-            ? { rejectUnauthorized: false }
-            : false,
+        migrations: [__dirname + '/migrations/*{.ts,.js}'],
+        synchronize:
+          configService.get('app.nodeEnv') === 'development' &&
+          configService.get('database.synchronize') === true,
+        migrationsRun: false,
+        logging: configService.get('app.nodeEnv') === 'development',
+        ssl: configService.get<boolean>('database.ssl')
+          ? { rejectUnauthorized: false }
+          : false,
         extra: {
           max: 10,
           connectionTimeoutMillis: 5000,

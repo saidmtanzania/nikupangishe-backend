@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/require-await */
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { CacheModule } from '@nestjs/cache-manager';
+import { createKeyv } from '@keyv/redis';
 import { ScheduleModule } from '@nestjs/schedule';
 import {
   appConfig,
@@ -12,6 +13,9 @@ import {
   uploadConfig,
   throttleConfig,
   awsConfig,
+  smsConfig,
+  emailConfig,
+  validateEnvironment,
 } from './config';
 import { S3Module } from './s3/s3.module';
 import { DatabaseModule } from './database/database.module';
@@ -24,6 +28,7 @@ import { ViewingsModule } from './viewings/viewings.module';
 import { ExchangesModule } from './exchanges/exchanges.module';
 import { ChatModule } from './chat/chat.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -38,23 +43,32 @@ import { NotificationsModule } from './notifications/notifications.module';
         uploadConfig,
         throttleConfig,
         awsConfig,
+        smsConfig,
+        emailConfig,
       ],
+      validate: validateEnvironment,
       envFilePath: '.env',
     }),
 
     // Cache with Redis
     CacheModule.registerAsync({
       isGlobal: true,
-      useFactory: async () => {
-        // In production, configure with Redis
-        // import { createClient } from 'redis';
-        // import { redisInsStore } from 'cache-manager-redis-yet';
-        // const redisClient = createClient({ socket: { host, port }, password });
-        // await redisClient.connect();
-        // return { store: redisInsStore(redisClient), ttl: 3600 };
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const host = configService.getOrThrow<string>('redis.host');
+        const port = configService.getOrThrow<number>('redis.port');
+        const password = configService.get<string>('redis.password');
+        const credentials = password ? `:${encodeURIComponent(password)}@` : '';
+
         return {
-          ttl: 3600,
-          max: 1000,
+          stores: [
+            createKeyv(`redis://${credentials}${host}:${port}`, {
+              namespace: 'nikupangishe',
+              throwOnConnectError: true,
+              throwOnErrors: true,
+            }),
+          ],
+          ttl: configService.getOrThrow<number>('redis.ttl') * 1000,
         };
       },
     }),
@@ -90,6 +104,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     ExchangesModule,
     ChatModule,
     NotificationsModule,
+    HealthModule,
   ],
 })
 export class AppModule {}

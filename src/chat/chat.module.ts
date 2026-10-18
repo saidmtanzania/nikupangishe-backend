@@ -7,11 +7,18 @@ import { ChatMessage } from './entities/chat-message.entity';
 import { User } from '../users/entities/user.entity';
 import { Notification } from '../notifications/entities/notification.entity';
 import { House } from '../houses/entities/house.entity';
+import { HouseAgent } from '../houses/entities/house-agent.entity';
 import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ChatMessage, User, Notification, House]),
+    TypeOrmModule.forFeature([
+      ChatMessage,
+      User,
+      Notification,
+      House,
+      HouseAgent,
+    ]),
     AuthModule,
   ],
   providers: [ChatGateway, ChatService],

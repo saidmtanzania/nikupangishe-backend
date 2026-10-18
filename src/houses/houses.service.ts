@@ -29,6 +29,7 @@ import {
 } from './dto/house.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../notifications/entities/notification.entity';
+import { invalidateListings, listingsCacheKey } from './house-cache.util';
 
 @Injectable()
 export class HousesService {
@@ -117,7 +118,7 @@ export class HousesService {
   }
 
   async findAll(filters: HouseFilterDto) {
-    const cacheKey = `houses:list:${JSON.stringify(filters)}`;
+    const cacheKey = await listingsCacheKey(this.cacheManager, filters);
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) return cached;
 
@@ -153,7 +154,7 @@ export class HousesService {
       },
     };
 
-    await this.cacheManager.set(cacheKey, result, 300); // Cache 5 mins
+    await this.cacheManager.set(cacheKey, result, 300_000); // Cache 5 mins
     return result;
   }
 
@@ -182,7 +183,7 @@ export class HousesService {
     }
 
     if (isPublic) {
-      await this.cacheManager.set(cacheKey, house, 300);
+      await this.cacheManager.set(cacheKey, house, 300_000);
     }
 
     return this.toFrontendFormat(house);
@@ -244,11 +245,7 @@ export class HousesService {
     return { message: 'House deactivated successfully' };
   }
 
-  /**
-   * Owner self-publishes a house — sets status directly to ACTIVE.
-   * This bypasses admin verification for MVP; verification badge is
-   * controlled separately by the isVerified flag.
-   */
+  /** Make a listing publicly visible; the verified badge is granted separately by an admin. */
   async publishHouse(id: string, owner: User) {
     const house = await this.findOneRaw(id);
     this.assertOwnership(house, owner);
@@ -257,7 +254,12 @@ export class HousesService {
       throw new BadRequestException('Cannot publish a deactivated listing');
     }
 
+    if (house.status === HouseStatus.ACTIVE) {
+      return this.toFrontendFormat(house);
+    }
+
     house.status = HouseStatus.ACTIVE;
+    house.rejectionReason = null as any;
     const updated = await this.houseRepository.save(house);
     await this.invalidateHouseCache(id);
     return this.toFrontendFormat(updated);
@@ -355,7 +357,7 @@ export class HousesService {
     const house = await this.findOneRaw(id);
 
     if (dto.approved) {
-      // Grant verified badge — does NOT change listing status
+      house.status = HouseStatus.ACTIVE;
       house.isVerified = true;
       house.verifiedAt = new Date();
       house.verifiedBy = admin.id;
@@ -365,7 +367,7 @@ export class HousesService {
       if (!dto.rejectionReason) {
         throw new BadRequestException('Rejection reason is required');
       }
-      // Revoke/deny verified badge — listing remains visible to owner
+      house.status = HouseStatus.REJECTED;
       house.isVerified = false;
       house.verifiedAt = null as any;
       house.verifiedBy = null as any;
@@ -414,12 +416,17 @@ export class HousesService {
   async getPendingVerification(admin: User) {
     if (admin.role !== UserRole.ADMIN)
       throw new ForbiddenException('Admin access required');
-    // Return active houses that have not yet received a verified badge
+    // Include legacy active/unverified listings while the status migration settles.
     const houses = await this.houseRepository
       .createQueryBuilder('house')
       .leftJoinAndSelect('house.owner', 'owner')
-      .where('house.status = :active', { active: HouseStatus.ACTIVE })
-      .andWhere('house.isVerified = false')
+      .where(
+        '(house.status = :pending OR (house.status = :active AND house.isVerified = false))',
+        {
+          pending: HouseStatus.PENDING_VERIFICATION,
+          active: HouseStatus.ACTIVE,
+        },
+      )
       .orderBy('house.createdAt', 'ASC')
       .getMany();
     return houses.map((h) => this.toFrontendFormat(h));
@@ -471,9 +478,9 @@ export class HousesService {
     };
   }
 
-  async addPhotos(id: string, urls: string[]): Promise<void> {
-    const house = await this.houseRepository.findOneBy({ id });
-    if (!house) throw new NotFoundException('House not found');
+  async addPhotos(id: string, urls: string[], owner: User): Promise<void> {
+    const house = await this.findOneRaw(id);
+    this.assertOwnership(house, owner);
     house.photos = [...(house.photos || []), ...urls];
     await this.houseRepository.save(house);
     await this.invalidateHouseCache(id);
@@ -616,10 +623,7 @@ export class HousesService {
   }
 
   private async invalidateListingsCache() {
-    // In production, use Redis scan to delete pattern
-    // For now, delete common cache keys
-    const keys = ['houses:list:{}'];
-    await Promise.all(keys.map((k) => this.cacheManager.del(k)));
+    await invalidateListings(this.cacheManager);
   }
 
   /**
@@ -669,19 +673,6 @@ export class HousesService {
    * Transform a House entity to the frontend Property interface shape.
    */
   private toFrontendFormat(house: House): any {
-    // Map backend status to frontend status
-    let frontendStatus: 'available' | 'occupied' | 'pending' = 'pending';
-    if (house.status === HouseStatus.ACTIVE) {
-      frontendStatus = 'available';
-    } else if (house.status === HouseStatus.RENTED) {
-      frontendStatus = 'occupied';
-    } else if (
-      house.status === HouseStatus.DRAFT ||
-      house.status === HouseStatus.PENDING_VERIFICATION
-    ) {
-      frontendStatus = 'pending';
-    }
-
     // Get primary agent ID if available
     let agentId: string | undefined;
     let primaryAssignment: HouseAgent | undefined;
@@ -772,13 +763,12 @@ export class HousesService {
       // Status — return the raw backend status so admin UI can use exact values.
       // isVerified already encodes whether the house has passed admin review.
       status: house.status,
+      // Dates arrive as strings when the house comes from the Redis cache
       availableFrom: house.availableFrom
-        ? house.availableFrom instanceof Date
-          ? house.availableFrom.toISOString().split('T')[0]
-          : String(house.availableFrom)
+        ? new Date(house.availableFrom).toISOString().split('T')[0]
         : null,
       createdAt: house.createdAt
-        ? house.createdAt.toISOString()
+        ? new Date(house.createdAt).toISOString()
         : new Date().toISOString(),
     };
   }

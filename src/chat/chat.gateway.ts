@@ -25,6 +25,8 @@ import {
   Notification,
   NotificationType,
 } from '../notifications/entities/notification.entity';
+import { ChatService } from './chat.service';
+import { ACCESS_TOKEN_COOKIE, readCookieHeader } from '../auth/auth.cookies';
 
 interface AuthenticatedSocket extends Socket {
   user: User;
@@ -37,11 +39,12 @@ interface SendMessageDto {
   type?: MessageType;
   fileUrl?: string;
   fileName?: string;
+  replyToId?: string;
 }
 
 @WebSocketGateway({
   cors: {
-    origin: '*',
+    origin: true,
     credentials: true,
   },
   namespace: '/chat',
@@ -56,6 +59,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   constructor(
     private jwtService: JwtService,
     private configService: ConfigService,
+    private chatService: ChatService,
     @InjectRepository(ChatMessage)
     private messageRepository: Repository<ChatMessage>,
     @InjectRepository(User)
@@ -67,6 +71,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleConnection(socket: AuthenticatedSocket) {
     try {
       const token =
+        readCookieHeader(
+          socket.handshake.headers.cookie,
+          ACCESS_TOKEN_COOKIE,
+        ) ||
         socket.handshake.auth?.token ||
         socket.handshake.headers?.authorization?.replace('Bearer ', '');
 
@@ -75,8 +83,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
+      const origin = socket.handshake.headers.origin;
+      const allowedOrigins = this.configService.get<string[]>(
+        'app.corsOrigins',
+        [],
+      );
+      if (origin && !allowedOrigins.includes(origin)) {
+        socket.disconnect();
+        return;
+      }
+
       const payload = this.jwtService.verify(token, {
-        secret: this.configService.get('jwt.secret'),
+        secret: this.configService.getOrThrow<string>('jwt.secret'),
       });
 
       const user = await this.userRepository.findOne({
@@ -119,6 +137,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { conversationId: string },
   ) {
     if (!socket.user) throw new WsException('Unauthorized');
+    await this.chatService.assertConversationParticipant(
+      data.conversationId,
+      socket.user.id,
+    );
     socket.join(`conversation:${data.conversationId}`);
     this.logger.log(
       `User ${socket.user.id} joined conversation ${data.conversationId}`,
@@ -134,10 +156,26 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     if (!socket.user) throw new WsException('Unauthorized');
 
+    await this.chatService.assertConversationParticipant(
+      data.conversationId,
+      socket.user.id,
+    );
+    await this.chatService.assertConversationParticipant(
+      data.conversationId,
+      data.receiverId,
+    );
+
+    const replyTo = await this.chatService.resolveReplyTarget(
+      data.conversationId,
+      data.replyToId,
+    );
+
     const message = this.messageRepository.create({
       conversationId: data.conversationId,
       senderId: socket.user.id,
       receiverId: data.receiverId,
+      houseId: replyTo?.houseId ?? null,
+      replyToId: replyTo?.id ?? null,
       content: data.content,
       type: data.type || MessageType.TEXT,
       fileUrl: data.fileUrl,
@@ -145,16 +183,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
 
     const saved = await this.messageRepository.save(message);
+    const titles = await this.chatService.getHouseTitles(
+      saved.houseId ? [saved.houseId] : [],
+    );
 
     // Emit to conversation room — use frontend-compatible field names
     this.server.to(`conversation:${data.conversationId}`).emit('message:new', {
-      id: saved.id,
-      conversationId: saved.conversationId,
-      senderId: saved.senderId,
-      content: saved.content,
-      timestamp: saved.createdAt
-        ? saved.createdAt.toISOString()
-        : new Date().toISOString(),
+      ...this.chatService.toClientMessage(
+        saved,
+        saved.houseId ? titles.get(saved.houseId) : undefined,
+        replyTo ? this.chatService.toReplyPreview(replyTo) : undefined,
+      ),
       sender: {
         id: socket.user.id,
         name: `${socket.user.firstName || ''} ${socket.user.lastName || ''}`.trim(),
@@ -182,7 +221,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       });
     }
 
-    return { event: 'message:sent', messageId: saved.id };
+    // No `event` key: Nest would emit it as an event instead of invoking the client's ack
+    return { ok: true, messageId: saved.id };
   }
 
   // Mark messages as read
@@ -193,13 +233,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     if (!socket.user) throw new WsException('Unauthorized');
 
-    await this.messageRepository.update(
-      {
-        conversationId: data.conversationId,
-        receiverId: socket.user.id,
-        isRead: false,
-      },
-      { isRead: true, readAt: new Date() },
+    await this.chatService.markConversationAsRead(
+      data.conversationId,
+      socket.user.id,
     );
 
     // Notify sender that messages were read

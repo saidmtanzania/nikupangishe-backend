@@ -11,6 +11,7 @@ import { User } from '../users/entities/user.entity';
 import { AgentProfile } from '../agents/entities/agent-profile.entity';
 import { TenantProfile } from '../tenants/entities/tenant-profile.entity';
 import { UsersModule } from '../users/users.module';
+import { DeliveryModule } from '../notifications/delivery/delivery.module';
 
 @Module({
   imports: [
@@ -20,11 +21,12 @@ import { UsersModule } from '../users/users.module';
       imports: [ConfigModule],
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        secret: configService.get('jwt.secret'),
+        secret: configService.getOrThrow<string>('jwt.secret'),
         signOptions: { expiresIn: configService.get('jwt.expiresIn') },
       }),
     }),
     forwardRef(() => UsersModule),
+    DeliveryModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, LocalStrategy],

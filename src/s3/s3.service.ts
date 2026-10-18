@@ -20,12 +20,13 @@ export class S3Service {
     this.region = this.config.get<string>('aws.region', 'us-east-1');
     this.bucket = this.config.get<string>('aws.bucket', '');
 
+    const accessKeyId = this.config.get<string>('aws.accessKeyId');
+    const secretAccessKey = this.config.get<string>('aws.secretAccessKey');
     this.client = new S3Client({
       region: this.region,
-      credentials: {
-        accessKeyId: this.config.get<string>('aws.accessKeyId', ''),
-        secretAccessKey: this.config.get<string>('aws.secretAccessKey', ''),
-      },
+      ...(accessKeyId && secretAccessKey
+        ? { credentials: { accessKeyId, secretAccessKey } }
+        : {}),
     });
   }
 

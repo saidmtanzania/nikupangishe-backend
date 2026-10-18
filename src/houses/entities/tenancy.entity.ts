@@ -7,6 +7,7 @@ import {
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { House } from './house.entity';
 import { TenantProfile } from '../../tenants/entities/tenant-profile.entity';
@@ -19,6 +20,18 @@ export enum TenancyStatus {
 }
 
 @Entity('tenancies')
+@Index('IDX_tenancies_active_house', ['houseId'], {
+  unique: true,
+  where: '"status" = \'active\'',
+})
+@Index('IDX_tenancies_active_tenant', ['tenantId'], {
+  unique: true,
+  where: '"status" = \'active\'',
+})
+@Index('IDX_tenancies_viewing_request', ['viewingRequestId'], {
+  unique: true,
+  where: '"viewingRequestId" IS NOT NULL',
+})
 export class Tenancy {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -61,6 +74,15 @@ export class Tenancy {
 
   @Column({ nullable: true, type: 'text' })
   notes: string;
+
+  // Official payment details the owner shared with the tenant on approval.
+  // Rent is always paid directly to the owner, never through the agent.
+  @Column({ type: 'text', nullable: true })
+  paymentInstructions: string | null;
+
+  // Viewing that led to this tenancy (null for tenancies recorded directly)
+  @Column({ type: 'uuid', nullable: true })
+  viewingRequestId: string | null;
 
   // The agent who facilitated this tenancy
   @Column({ nullable: true })

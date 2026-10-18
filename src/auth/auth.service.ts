@@ -8,6 +8,7 @@ import {
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -25,6 +26,10 @@ import {
 } from './dto/auth.dto';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
+import {
+  EmailService,
+  SmsService,
+} from '../notifications/delivery/delivery.service';
 
 @Injectable()
 export class AuthService {
@@ -37,6 +42,8 @@ export class AuthService {
     private tenantProfileRepository: Repository<TenantProfile>,
     private jwtService: JwtService,
     private configService: ConfigService,
+    private smsService: SmsService,
+    private emailService: EmailService,
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -64,11 +71,6 @@ export class AuthService {
       phone = `+255${phone.slice(1)}`;
     } else if (/^255\d{9}$/.test(phone)) {
       phone = `+${phone}`;
-    }
-
-    // Default password if not provided (frontend first-step registration may not include it)
-    if (!password) {
-      password = 'Temp@' + Math.random().toString(36).slice(2, 10);
     }
 
     // Check duplicate email/phone
@@ -119,7 +121,7 @@ export class AuthService {
       message: 'Registration successful. Please verify your phone number.',
       userId: user.id,
       // In dev mode, return OTP; remove in production
-      ...(this.configService.get('app.nodeEnv') === 'development' && { otp }),
+      ...(this.shouldExposeAuthCodes() && { otp }),
     };
   }
 
@@ -143,7 +145,7 @@ export class AuthService {
           code: 'PHONE_NOT_VERIFIED',
           requiresPhoneVerification: true,
           phone: user.phone,
-          ...(this.configService.get('app.nodeEnv') === 'development' && {
+          ...(this.shouldExposeAuthCodes() && {
             otp,
           }),
         },
@@ -226,12 +228,9 @@ export class AuthService {
 
     const otp = await this.issuePhoneOtp(user);
 
-    // TODO: Send via SMS
-    console.log(`New OTP for ${phone}: ${otp}`);
-
     return {
       message: 'OTP sent successfully',
-      ...(this.configService.get('app.nodeEnv') === 'development' && { otp }),
+      ...(this.shouldExposeAuthCodes() && { otp }),
     };
   }
 
@@ -329,16 +328,30 @@ export class AuthService {
     user.passwordResetExpiresAt = new Date(Date.now() + 60 * 60 * 1000);
     await this.userRepository.save(user);
 
-    // TODO: Send the resetToken via email/SMS in production
-    // For development, include the token in the response
-    const isDev = this.configService.get('NODE_ENV') !== 'production';
+    const webAppUrl = this.configService.getOrThrow<string>('email.webAppUrl');
+    const resetUrl = `${webAppUrl}/auth/reset-password?token=${encodeURIComponent(resetToken)}`;
+
+    try {
+      if (email) {
+        await this.emailService.sendPasswordReset(email, resetUrl);
+      } else if (phone) {
+        await this.smsService.send(
+          phone,
+          `Reset your Nikupangishe password using this link: ${resetUrl}`,
+        );
+      }
+    } catch {
+      throw new ServiceUnavailableException(
+        'Reset instructions could not be delivered. Please try again later.',
+      );
+    }
 
     return {
       message:
         'If an account with that email/phone exists, you will receive reset instructions.',
-      ...(isDev && {
+      ...(this.shouldExposeAuthCodes() && {
         resetToken,
-        resetUrl: `/auth/reset-password?token=${resetToken}`,
+        resetUrl,
       }),
     };
   }
@@ -421,14 +434,36 @@ export class AuthService {
     user.phoneOtp = await bcrypt.hash(otp, 10);
     user.phoneOtpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await this.userRepository.save(user);
-    // TODO: Send OTP via SMS provider
-    console.log(`OTP for ${user.phone}: ${otp}`);
+    try {
+      await this.smsService.send(
+        user.phone,
+        `Your Nikupangishe verification code is ${otp}. It expires in 10 minutes.`,
+      );
+    } catch {
+      throw new ServiceUnavailableException(
+        'Verification code could not be delivered. Please try again later.',
+      );
+    }
     return otp;
   }
 
+  private shouldExposeAuthCodes(): boolean {
+    return (
+      this.configService.get('app.nodeEnv') === 'development' &&
+      this.configService.get('EXPOSE_DEV_AUTH_CODES') === 'true'
+    );
+  }
+
   private sanitizeUser(user: User) {
-    const { password, phoneOtp, phoneOtpExpiresAt, refreshToken, ...rest } =
-      user;
+    const {
+      password,
+      phoneOtp,
+      phoneOtpExpiresAt,
+      refreshToken,
+      passwordResetToken,
+      passwordResetExpiresAt,
+      ...rest
+    } = user;
     return {
       ...rest,
       // Frontend-compatible fields

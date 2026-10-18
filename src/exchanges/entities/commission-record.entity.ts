@@ -5,6 +5,7 @@ import {
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { AgentProfile } from '../../agents/entities/agent-profile.entity';
 import { TenantProfile } from '../../tenants/entities/tenant-profile.entity';
@@ -15,6 +16,7 @@ export enum CommissionType {
 }
 
 @Entity('commission_records')
+@Index('IDX_commission_records_agent_created', ['agentId', 'createdAt'])
 export class CommissionRecord {
   @PrimaryGeneratedColumn('uuid')
   id: string;

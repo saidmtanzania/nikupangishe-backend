@@ -10,11 +10,12 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { ViewingsService } from './viewings.service';
 import {
-  ViewingsService,
+  ApproveTenantDto,
   CreateViewingDto,
   UpdateViewingDto,
-} from './viewings.service';
+} from './dto/viewing.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -56,8 +57,11 @@ export class ViewingsController {
 
   @Get(':id')
   @ApiOperation({ summary: 'Get viewing request details' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.viewingsService.findOne(id);
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.viewingsService.findOne(id, user);
   }
 
   @Patch(':id')
@@ -70,5 +74,19 @@ export class ViewingsController {
     @CurrentUser() user: User,
   ) {
     return this.viewingsService.updateViewing(id, dto, user);
+  }
+
+  @Post(':id/approve-tenant')
+  @Roles(UserRole.OWNER)
+  @ApiOperation({
+    summary:
+      'Owner approves the interested tenant: creates the tenancy, shares payment details and records the agent commission [OWNER]',
+  })
+  async approveTenant(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ApproveTenantDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.viewingsService.approveTenant(id, dto, user);
   }
 }

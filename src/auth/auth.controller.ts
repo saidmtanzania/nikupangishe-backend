@@ -5,6 +5,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 import {
   BadRequestException,
+  UnauthorizedException,
   Controller,
   Post,
   Get,
@@ -14,7 +15,9 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import {
   ApiTags,
@@ -37,11 +40,23 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { User } from '../users/entities/user.entity';
 import { Throttle } from '@nestjs/throttler';
+import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import {
+  clearAuthCookies,
+  REFRESH_TOKEN_COOKIE,
+  readCookie,
+  setAuthCookies,
+} from './auth.cookies';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private jwtService: JwtService,
+    private configService: ConfigService,
+  ) {}
 
   @Post('register')
   @ApiOperation({ summary: 'Register a new user (owner, agent, or tenant)' })
@@ -57,19 +72,31 @@ export class AuthController {
   @UseGuards(AuthGuard('local'))
   @ApiOperation({ summary: 'Login with email and password' })
   @Throttle({ default: { limit: 10, ttl: 60000 } })
-  async login(@Request() req, @Body() loginDto: LoginDto) {
-    return this.authService.login(req.user);
+  async login(
+    @Request() req,
+    @Body() loginDto: LoginDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.authService.login(req.user);
+    this.setAuthCookies(response, result.accessToken, result.refreshToken);
+    return this.presentAuthResult(result, req);
   }
 
   @Post('verify-phone')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Verify phone number with OTP' })
-  async verifyPhone(@Body() dto: VerifyPhoneDto) {
+  async verifyPhone(
+    @Body() dto: VerifyPhoneDto,
+    @Request() request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
     const code = dto.code || dto.otp;
     if (!code) {
       throw new BadRequestException('Verification code is required');
     }
-    return this.authService.verifyPhone(dto.phone, code);
+    const result = await this.authService.verifyPhone(dto.phone, code);
+    this.setAuthCookies(response, result.accessToken, result.refreshToken);
+    return this.presentAuthResult(result, request);
   }
 
   @Post('resend-code')
@@ -91,12 +118,39 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Refresh access token' })
-  async refresh(@Body() dto: RefreshTokenDto, @Request() req) {
-    // Decode the refresh token to get userId
-    const payload = JSON.parse(
-      Buffer.from(dto.refreshToken.split('.')[1], 'base64').toString(),
+  async refresh(
+    @Body() dto: RefreshTokenDto,
+    @Request() request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const refreshToken =
+      dto.refreshToken ?? readCookie(request, REFRESH_TOKEN_COOKIE);
+    if (!refreshToken) {
+      throw new UnauthorizedException('Refresh token is required');
+    }
+
+    let payload: { sub?: string };
+    try {
+      payload = await this.jwtService.verifyAsync<{ sub?: string }>(
+        refreshToken,
+        {
+          secret: this.configService.getOrThrow<string>('jwt.refreshSecret'),
+        },
+      );
+    } catch {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    if (!payload.sub) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const result = await this.authService.refreshToken(
+      payload.sub,
+      refreshToken,
     );
-    return this.authService.refreshToken(payload.sub, dto.refreshToken);
+    this.setAuthCookies(response, result.accessToken, result.refreshToken);
+    return this.isWebRequest(request) ? { refreshed: true } : result;
   }
 
   @Post('logout')
@@ -104,8 +158,13 @@ export class AuthController {
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Logout and invalidate tokens' })
-  async logout(@CurrentUser() user: User) {
-    return this.authService.logout(user.id);
+  async logout(
+    @CurrentUser() user: User,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const result = await this.authService.logout(user.id);
+    clearAuthCookies(response);
+    return result;
   }
 
   @Get('me')
@@ -146,5 +205,34 @@ export class AuthController {
   @ApiResponse({ status: 400, description: 'Invalid or expired token' })
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
+  }
+
+  private setAuthCookies(
+    response: Response,
+    accessToken: string,
+    refreshToken: string,
+  ) {
+    setAuthCookies(
+      response,
+      accessToken,
+      refreshToken,
+      this.configService.get('app.nodeEnv') === 'production',
+    );
+  }
+
+  private isWebRequest(request: { headers?: Record<string, string> }): boolean {
+    return request.headers?.['x-client-platform'] === 'web';
+  }
+
+  private presentAuthResult(
+    result: {
+      user: unknown;
+      accessToken: string;
+      refreshToken: string;
+    },
+    request: { headers?: Record<string, string> },
+  ) {
+    if (this.isWebRequest(request)) return { user: result.user };
+    return result;
   }
 }

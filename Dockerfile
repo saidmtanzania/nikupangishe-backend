@@ -1,31 +1,29 @@
-FROM node:20-alpine AS base
+FROM node:22-bookworm-slim AS base
 WORKDIR /app
-RUN apk add --no-cache python3 make g++
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends python3 make g++ \
+	&& rm -rf /var/lib/apt/lists/*
 
 # Dependencies stage
 FROM base AS dependencies
 COPY package*.json ./
-RUN npm ci --only=production && cp -R node_modules /tmp/prod_modules
+RUN npm ci --omit=dev && cp -R node_modules /tmp/prod_modules
 RUN npm ci
 
 # Build stage
 FROM dependencies AS build
 COPY . .
 RUN npm run build
+RUN mkdir -p uploads
 
 # Production stage
-FROM node:20-alpine AS production
+FROM gcr.io/distroless/nodejs24-debian13:nonroot AS production
+ENV NODE_ENV=production
 WORKDIR /app
-RUN apk add --no-cache dumb-init
 
-COPY --from=build /app/dist ./dist
-COPY --from=build /tmp/prod_modules ./node_modules
-COPY package.json ./
-
-RUN mkdir -p uploads && chown -R node:node /app
-USER node
+COPY --from=build --chown=65532:65532 /app/dist ./dist
+COPY --from=build --chown=65532:65532 /tmp/prod_modules ./node_modules
+COPY --from=build --chown=65532:65532 /app/uploads ./uploads
 
 EXPOSE 3000
-
-ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "dist/main"]
+CMD ["dist/database/start-production.js"]

@@ -10,11 +10,8 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import {
-  ExchangesService,
-  CreateExchangeDto,
-  ConfirmTenancyDto,
-} from './exchanges.service';
+import { ExchangesService } from './exchanges.service';
+import { ConfirmTenancyDto, CreateExchangeDto } from './dto/exchange.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -54,15 +51,27 @@ export class ExchangesController {
 
   @Get('my-tenancies')
   @Roles(UserRole.OWNER)
-  @ApiOperation({ summary: 'Get all tenancies for houses owned by current user [OWNER]' })
+  @ApiOperation({
+    summary: 'Get all tenancies for houses owned by current user [OWNER]',
+  })
   async getMyTenancies(@CurrentUser() user: User) {
     return this.exchangesService.getOwnerTenancies(user.id);
   }
 
+  @Get('my-tenancy')
+  @Roles(UserRole.TENANT)
+  @ApiOperation({ summary: 'Get the current tenant active tenancy [TENANT]' })
+  async getMyTenancy(@CurrentUser() user: User) {
+    return this.exchangesService.getTenantTenancy(user.id);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Get exchange request details' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.exchangesService.findOneFormatted(id);
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    return this.exchangesService.findOneFormatted(id, user);
   }
 
   @Patch(':id/approve')

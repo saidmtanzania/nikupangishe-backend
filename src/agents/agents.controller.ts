@@ -70,6 +70,14 @@ export class AgentsController {
     return this.agentsService.getMyProfile(user.id);
   }
 
+  @Get('me/commissions')
+  @Roles(UserRole.AGENT)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get my commission history and totals [AGENT]' })
+  async getMyCommissions(@CurrentUser() user: User) {
+    return this.agentsService.getMyCommissions(user.id);
+  }
+
   @Get(':id')
   @Public()
   @ApiOperation({ summary: 'Get agent profile by ID (public)' })

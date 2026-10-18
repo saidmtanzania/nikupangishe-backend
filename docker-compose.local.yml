@@ -1,0 +1,42 @@
+# Local dev infrastructure only (run the API on the host with `npm run start:dev`).
+# Usage: docker compose -f docker-compose.local.yml up -d
+name: nikupangishe-local
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: nikupangishe-local-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: nikupangishe_pass
+      POSTGRES_DB: nikupangishe
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - local_postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d nikupangishe']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: nikupangishe-local-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass nikupangishe_redis
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - local_redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', '-a', 'nikupangishe_redis', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  local_postgres_data:
+  local_redis_data:

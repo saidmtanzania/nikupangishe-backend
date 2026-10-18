@@ -231,7 +231,7 @@ export class HousesController {
   async uploadPhotos(
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFiles() files: Express.Multer.File[],
-    @CurrentUser() _user: User,
+    @CurrentUser() user: User,
   ) {
     const urls = await Promise.all(
       files.map((f) =>
@@ -243,7 +243,7 @@ export class HousesController {
         ),
       ),
     );
-    await this.housesService.addPhotos(id, urls);
+    await this.housesService.addPhotos(id, urls, user);
     return { message: 'Photos uploaded', images: urls, urls };
   }
 
@@ -269,7 +269,7 @@ export class HousesController {
   async uploadImages(
     @Param('id', ParseUUIDPipe) id: string,
     @UploadedFiles() files: Express.Multer.File[],
-    @CurrentUser() _user: User,
+    @CurrentUser() user: User,
   ) {
     const urls = await Promise.all(
       files.map((f) =>
@@ -281,7 +281,7 @@ export class HousesController {
         ),
       ),
     );
-    await this.housesService.addPhotos(id, urls);
+    await this.housesService.addPhotos(id, urls, user);
     return { message: 'Images uploaded', images: urls, urls };
   }
 

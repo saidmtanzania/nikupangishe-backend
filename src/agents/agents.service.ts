@@ -6,12 +6,17 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import {
   AgentProfile,
   AgentVerificationStatus,
 } from './entities/agent-profile.entity';
 import { User, UserRole } from '../users/entities/user.entity';
+import {
+  CommissionRecord,
+  CommissionType,
+} from '../exchanges/entities/commission-record.entity';
+import { House } from '../houses/entities/house.entity';
 import {
   UpdateAgentProfileDto,
   VerifyAgentDto,
@@ -23,6 +28,10 @@ export class AgentsService {
   constructor(
     @InjectRepository(AgentProfile)
     private agentProfileRepository: Repository<AgentProfile>,
+    @InjectRepository(CommissionRecord)
+    private commissionRepository: Repository<CommissionRecord>,
+    @InjectRepository(House)
+    private houseRepository: Repository<House>,
   ) {}
 
   async findAll(filters: AgentFilterDto) {
@@ -70,6 +79,69 @@ export class AgentsService {
     });
     if (!agent) throw new NotFoundException('Agent profile not found');
     return agent;
+  }
+
+  /** Commission history for the signed-in agent, newest first, with totals. */
+  async getMyCommissions(userId: string) {
+    const agent = await this.agentProfileRepository.findOne({
+      where: { userId },
+      select: ['id'],
+    });
+    if (!agent) throw new NotFoundException('Agent profile not found');
+
+    const records = await this.commissionRepository.find({
+      where: { agentId: agent.id },
+      relations: ['tenant', 'tenant.user'],
+      order: { createdAt: 'DESC' },
+      take: 500,
+    });
+
+    const houseIds = [...new Set(records.map((r) => r.houseId))];
+    const houses = houseIds.length
+      ? await this.houseRepository.find({
+          where: { id: In(houseIds) },
+          select: ['id', 'title', 'area', 'city'],
+        })
+      : [];
+    const houseById = new Map(houses.map((h) => [h.id, h]));
+
+    const items = records.map((r) => {
+      const house = houseById.get(r.houseId);
+      const tenantUser = r.tenant?.user;
+      return {
+        id: r.id,
+        type: r.type,
+        amount: Number(r.amount),
+        currency: r.currency,
+        houseId: r.houseId,
+        propertyTitle: house?.title ?? 'Property',
+        propertyLocation: house ? `${house.area}, ${house.city}` : '',
+        tenantName: tenantUser
+          ? `${tenantUser.firstName} ${tenantUser.lastName}`.trim()
+          : '',
+        exchangeRequestId: r.exchangeRequestId ?? null,
+        date: r.createdAt.toISOString(),
+      };
+    });
+
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const sum = (list: typeof items) =>
+      list.reduce((total, c) => total + c.amount, 0);
+
+    return {
+      items,
+      totals: {
+        allTime: sum(items),
+        thisMonth: sum(items.filter((c) => new Date(c.date) >= monthStart)),
+        placements: items.filter(
+          (c) => c.type === CommissionType.INITIAL_PLACEMENT,
+        ).length,
+        exchanges: items.filter((c) => c.type === CommissionType.EXCHANGE)
+          .length,
+        currency: items[0]?.currency ?? 'TZS',
+      },
+    };
   }
 
   async updateProfile(
